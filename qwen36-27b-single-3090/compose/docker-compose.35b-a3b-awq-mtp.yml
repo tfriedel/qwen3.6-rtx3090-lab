@@ -1,0 +1,89 @@
+# ===========================================================================
+# EXPERIMENT: Qwen3.6-35B-A3B (MoE) — vLLM AWQ TP=2 + MTP-1 + prefix-cache OFF
+#
+# Goal: probe the +27.5 % decode-rate claim from
+# thc1006/qwen3.6-vllm-2x3090 — vLLM `method=mtp num_speculative_tokens=1`
+# is NET POSITIVE on 2× 3090 *only when prefix caching is OFF* (vllm #38182:
+# MTP drops cache hit rate ≈92 % → ≈71 %, masking compute speedup with
+# cache-loss penalty).
+#
+# Pinned to GPUs 1,2 (GPU 0 left free for other workloads).
+# ===========================================================================
+services:
+  vllm-qwen36-35b-a3b:
+    image: vllm/vllm-openai@sha256:9bba4628a3b943e0dd33caefb94b811569ba1e97bdf23bee19a265c31b947ccb
+    container_name: vllm-qwen36-35b-a3b
+    restart: "no"
+    ports:
+      - "8021:8000"
+    volumes:
+      - ${MODEL_DIR:-../models}:/root/.cache/huggingface
+      - ../patches/patch_tolist_cudagraph.py:/patches/patch_tolist_cudagraph.py:ro
+    environment:
+      - CUDA_VISIBLE_DEVICES=1,2
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+      - VLLM_WORKER_MULTIPROC_METHOD=spawn
+      - NCCL_CUMEM_ENABLE=0
+      - NCCL_P2P_DISABLE=1
+      - NCCL_IB_DISABLE=1
+      - VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=1
+      - VLLM_NO_USAGE_STATS=1
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:512
+      - VLLM_FLOAT32_MATMUL_PRECISION=high
+      - VLLM_USE_FLASHINFER_SAMPLER=1
+      - OMP_NUM_THREADS=1
+      - CUDA_DEVICE_MAX_CONNECTIONS=8
+      - VLLM_ALLOW_LONG_MAX_MODEL_LEN=1
+      - VLLM_MARLIN_USE_ATOMIC_ADD=1
+    shm_size: "16gb"
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        set -e
+        pip install xxhash -q
+        python3 /patches/patch_tolist_cudagraph.py
+        exec vllm serve "$@"
+      - --
+    command:
+      - --model
+      - /root/.cache/huggingface/qwen3.6-35b-a3b-awq-int4
+      - --served-model-name
+      - qwen3.6-35b-a3b-awq
+      - --quantization
+      - compressed-tensors
+      - --dtype
+      - float16
+      - --tensor-parallel-size
+      - "2"
+      - --max-model-len
+      - "200000"
+      - --gpu-memory-utilization
+      - "0.95"
+      - --max-num-seqs
+      - "1"
+      - --max-num-batched-tokens
+      - "2048"
+      - --trust-remote-code
+      - --reasoning-parser
+      - qwen3
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - qwen3_coder
+      # MTP-1 + prefix-caching OFF — the matched-flag combo from the sibling repo
+      - --speculative-config
+      - '{"method":"mtp","num_speculative_tokens":1}'
+      - --no-enable-prefix-caching
+      - --enable-chunked-prefill
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"

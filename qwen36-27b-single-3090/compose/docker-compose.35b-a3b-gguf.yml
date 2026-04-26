@@ -1,0 +1,69 @@
+# ===========================================================================
+# Qwen3.6-35B-A3B (MoE) — llama.cpp + UD-IQ4_XS GGUF — single 3090.
+#
+# vLLM/AWQ on a single 3090 was launch-overhead bound (~18 TPS) because the
+# 21.6 GB AWQ weights left no room for CUDA graphs or torch.compile.
+# llama.cpp on the same hardware with a smaller IQ4_XS GGUF (~17.5 GB) hits
+# ~117 TPS per published 3090 benchmarks — 6-7× faster on the same card.
+#
+# Endpoint: http://localhost:8022/v1  (model alias: qwen3.6-35b-a3b-gguf)
+# Pinned to GPU 0. Vision NOT loaded (text-only — mmproj would need a
+# separate flag and adds ~1 GB; not the use case for this single-GPU mode).
+#
+# Run:  docker compose -f docker-compose.35b-a3b-gguf.yml up -d
+# ===========================================================================
+services:
+  llamacpp-qwen36-35b-a3b:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    container_name: llamacpp-qwen36-35b-a3b
+    restart: "no"
+    # Image's built-in healthcheck probes localhost:8080 inside the container,
+    # but we bind 8000 — the probe always fails despite the server being healthy.
+    healthcheck:
+      disable: true
+    ports:
+      - "8022:8000"
+    volumes:
+      - ${MODEL_DIR:-../models}:/models:ro
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command:
+      - --model
+      - /models/Qwen3.6-35B-A3B-UD-IQ4_XS.gguf
+      - --alias
+      - qwen3.6-35b-a3b-gguf
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --n-gpu-layers
+      - "999"
+      - --ctx-size
+      - "131072"
+      - --parallel
+      - "1"
+      - --flash-attn
+      - "on"
+      - --jinja
+      # Sampling defaults from the Reddit/llama.cpp Qwen3.6 recipe.
+      - --temp
+      - "0.6"
+      - --top-p
+      - "0.95"
+      - --top-k
+      - "20"
+      - --min-p
+      - "0.0"
+      # KV cache quantization to fit large context with the 17.5 GB weights.
+      - -ctk
+      - q8_0
+      - -ctv
+      - q8_0
+      - --no-mmap

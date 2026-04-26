@@ -1,0 +1,31 @@
+# Model weights — multi-GB, fetched via setup.sh / hf download
+qwen36-27b-single-3090/models/
+*.gguf
+*.safetensors
+*.bin
+
+# External dependencies cloned by setup.sh
+qwen36-27b-single-3090/patches/genesis/
+
+# Python / build artifacts
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Editor / OS
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Local logs / scratch
+*.log
+/tmp-*
+/scratch/

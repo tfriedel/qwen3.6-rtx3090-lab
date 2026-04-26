@@ -1,0 +1,91 @@
+# ===========================================================================
+# Qwen3.6-35B-A3B (MoE, 3B active) — AWQ-INT4 — single 3090, GPU 1.
+#
+# Runs alongside the default 27B (GPU 0, port 8020). Endpoint: :8021/v1.
+# Model: cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit (~20 GB on disk, MoE qwen3_5_moe).
+#
+# Why this variant: NVFP4 needs Blackwell, FP8 needs TP=2. AWQ-INT4 is the
+# only single-3090-fit option for the 35B-A3B that stays in vLLM.
+#
+# Quality vs the 27B int4 (per Qwen's own benchmarks): the 35B-A3B trails on
+# every reasoning/coding task by 1–10 points. Speed advantage: ~3–5x faster
+# token generation since only 3B params are active per token.
+#
+# Run:  docker compose -f docker-compose.35b-a3b-awq.yml up -d
+# ===========================================================================
+services:
+  vllm-qwen36-35b-a3b:
+    image: vllm/vllm-openai@sha256:9bba4628a3b943e0dd33caefb94b811569ba1e97bdf23bee19a265c31b947ccb
+    container_name: vllm-qwen36-35b-a3b
+    restart: "no"
+    ports:
+      - "8021:8000"
+    volumes:
+      - ${MODEL_DIR:-../models}:/root/.cache/huggingface
+      - ../patches/patch_tolist_cudagraph.py:/patches/patch_tolist_cudagraph.py:ro
+    environment:
+      - CUDA_VISIBLE_DEVICES=0,1
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+      - VLLM_WORKER_MULTIPROC_METHOD=spawn
+      - NCCL_CUMEM_ENABLE=0
+      - NCCL_P2P_DISABLE=1
+      - VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=1
+      - VLLM_NO_USAGE_STATS=1
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:512
+      - VLLM_FLOAT32_MATMUL_PRECISION=high
+      - VLLM_USE_FLASHINFER_SAMPLER=1
+      - OMP_NUM_THREADS=1
+      - CUDA_DEVICE_MAX_CONNECTIONS=8
+      - VLLM_ALLOW_LONG_MAX_MODEL_LEN=1
+      - VLLM_MARLIN_USE_ATOMIC_ADD=1
+    shm_size: "16gb"
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        set -e
+        pip install xxhash -q
+        python3 /patches/patch_tolist_cudagraph.py
+        exec vllm serve "$@"
+      - --
+    command:
+      - --model
+      - /root/.cache/huggingface/qwen3.6-35b-a3b-awq-int4
+      - --served-model-name
+      - qwen3.6-35b-a3b-awq
+      - --quantization
+      - compressed-tensors
+      - --dtype
+      - float16
+      - --tensor-parallel-size
+      - "2"
+      - --max-model-len
+      - "200000"
+      - --gpu-memory-utilization
+      - "0.95"
+      - --max-num-seqs
+      - "1"
+      - --max-num-batched-tokens
+      - "2048"
+      # KV cache stays at default (fp16) — vLLM's compressed-tensors MoE path
+      # rejects fp8_e5m2 KV. Fine: 40 layers × 2 KV heads × 256 head_dim → ~5 GB at 64K ctx.
+      - --trust-remote-code
+      - --reasoning-parser
+      - qwen3
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - qwen3_coder
+      - --enable-prefix-caching
+      - --enable-chunked-prefill
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
