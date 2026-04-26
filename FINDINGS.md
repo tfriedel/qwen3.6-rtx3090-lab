@@ -330,7 +330,37 @@ Per-card: ~22.6 GiB used, both GPUs
 
 That's **~2× the 27B's TP=2 throughput** (149 vs ~93 TPS) — exactly the MoE A3B speed advantage of activating only 3B params per token. Quality is lower than the 27B per Qwen's own benchmarks (1–10 pts depending on task; the 27B wins on every reasoning/coding axis), but for fast/cheap calls or large-context summarization the MoE is excellent.
 
-**Untapped TP=2 optimization (not yet applied):** per the sibling repo `thc1006/qwen3.6-vllm-2x3090` clean A/B retest on 2× 3090, enabling `--speculative-config '{"method":"mtp","num_speculative_tokens":1}'` AND `--no-enable-prefix-caching` flips MTP from a regression to **+27.5% decode rate**. Tradeoff: prefix caching off, so repeated-prompt sessions lose the cache speedup. The previously-published vLLM MTP −12 % was confounded by prefix caching being on (vllm #38182: MTP drops cache hit rate ≈92 % → ≈71 %, masking compute speedup with cache-loss penalty). Worth probing on our rig if we want to push past 149 TPS.
+### TP=2 + MTP exploration (`docker-compose.35b-a3b-awq-mtp.yml`)
+
+Probed the +27.5 % decode-rate claim from `thc1006/qwen3.6-vllm-2x3090` by enabling vLLM's `--speculative-config '{"method":"mtp","num_speculative_tokens":k}'` AND `--no-enable-prefix-caching` (the prefix-cache flag matters: vllm #38182 reports MTP drops cache hit rate ≈92 % → ≈71 %, which can mask the compute speedup with cache-loss penalty).
+
+Pinned to **GPUs 1,2** instead of 0,1 to leave GPU 0 free for other workloads. Bumped `--max-num-batched-tokens` from 2048 → 4096 per vLLM's startup warning (MTP needs more slots to schedule draft tokens).
+
+Result on this rig:
+
+| Config | narrative-story | code-mergesort | narrative-explain | Notes |
+|---|---|---|---|---|
+| baseline (no MTP, prefix cache ON) | 149 | 149 | 149 | the production tp2 mode |
+| MTP k=1, no prefix cache, batch 2048 | 159 | 178 | 165 | +7 / +19 / +11 % |
+| MTP k=1, no prefix cache, batch 4096 | 162 | 178 | 165 | batch tweak helps narrative slightly |
+| MTP k=2 | 182 | 229 | 191 | +22 / +54 / +28 % |
+| **MTP k=3** ✓ chosen | **179** | **264** | **200** | +20 / +77 / +34 % — best aggregate |
+| MTP k=4 | 171 | 276 | 190 | +15 / +85 / +27 % — narrative regresses, code keeps gaining |
+
+**k=3 is the cross-prompt sweet spot.** k=4 wins on code prompts (where draft acceptance stays high deep in the speculation tree) but loses on narrative (lower per-position acceptance + larger verify cost dominates). Acceptance metrics observed:
+
+```
+k=1: mean accept length 1.7–1.9  (pos-0: 71–94 %)
+k=2: mean accept length 2.1–2.5  (pos-0: 70–85 %, pos-1: 42–68 %)
+k=3: mean accept length 2.7–3.0  (pos-0: 77–84 %, pos-1: 57–68 %, pos-2: 40–53 %)
+k=4: mean accept length 2.3–3.9  (pos-0: 67–90 %, pos-1: 38–80 %, pos-2: 20–68 %, pos-3: 9–54 %)
+```
+
+This **partially confirms** the sibling repo's +27.5 % claim (we hit +20 % on narrative-story, +28 % on narrative-explain, +77 % on code at k=3). The "190 TPS" target from earlier estimation is comfortably exceeded on most prompt types. Code-heavy workloads see the largest gains because MTP's draft tree stays predictable for structured token sequences.
+
+**Tradeoff:** prefix caching is off, so repeated-prompt sessions (e.g., long-system-prompt agents) lose the cache speedup. Per-request decode is faster; per-session-with-cache-hit decode may be slower. For pure throughput, use this. For long-system-prompt agentic workflows where prefix cache hit rate would be high, fall back to the plain `tp2` mode.
+
+This **does NOT** contradict the spec-decode repo's negative finding for **llama.cpp draft-then-verify** on A3B — MTP is a different mechanism (uses target's own hidden states for the draft, not a separate draft-model forward pass). The expert-saturation argument for llama.cpp draft still holds: K is small, verify pass loads the union of K positions' experts, K ≪ saturation threshold ≈ 94. MTP at k=3 still has K=3 ≪ 94, but its verify-cost shape is different — empirically it's a net win here.
 
 ### TP=2 max-context probe results
 
@@ -439,6 +469,7 @@ qwen36-27b-single-3090/compose/docker-compose.longctx-experimental.yml  (modifie
 qwen36-27b-single-3090/compose/docker-compose.tp2.yml                   (new — 2-GPU variant, TPS sweet spot)
 qwen36-27b-single-3090/compose/docker-compose.tp4.yml                   (new — 4-GPU variant, max context)
 qwen36-27b-single-3090/compose/docker-compose.35b-a3b-awq.yml           (new — MoE vLLM TP=2, 200K ctx, 2× GPU recommended)
+qwen36-27b-single-3090/compose/docker-compose.35b-a3b-awq-mtp.yml       (new — MoE vLLM TP=2 + MTP-3 + no-prefix-cache, 179–264 TPS, GPUs 1-2)
 qwen36-27b-single-3090/compose/docker-compose.35b-a3b-awq-tp1.yml       (new — MoE vLLM TP=1, kept for posterity, 18 TPS)
 qwen36-27b-single-3090/compose/docker-compose.35b-a3b-gguf.yml          (new — MoE llama.cpp IQ4_XS, 1× GPU recommended, 125 TPS)
 qwen36-27b-single-3090/scripts/probe_moe_ctx.sh                         (new — context-fit probe for MoE variants)

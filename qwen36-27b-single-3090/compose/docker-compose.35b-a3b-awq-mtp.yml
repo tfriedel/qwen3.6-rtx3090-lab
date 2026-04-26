@@ -70,8 +70,9 @@ services:
       - "0.95"
       - --max-num-seqs
       - "1"
+      # Bumped to 4096 per vLLM warning — MTP-1 needs 2× the slot count to schedule draft tokens.
       - --max-num-batched-tokens
-      - "2048"
+      - "4096"
       - --trust-remote-code
       - --reasoning-parser
       - qwen3
@@ -79,8 +80,13 @@ services:
       - --tool-call-parser
       - qwen3_coder
       # MTP-1 + prefix-caching OFF — the matched-flag combo from the sibling repo
+      # k=3 is the cross-prompt sweet spot on this rig:
+      #   k=1: +8/+19/+11 % (narrative/code/explain)
+      #   k=2: +22/+54/+28 %
+      #   k=3: +20/+77/+34 %  ← chosen — best aggregate
+      #   k=4: +15/+85/+27 %  (narrative regresses, code keeps gaining)
       - --speculative-config
-      - '{"method":"mtp","num_speculative_tokens":1}'
+      - '{"method":"mtp","num_speculative_tokens":3}'
       - --no-enable-prefix-caching
       - --enable-chunked-prefill
       - --host

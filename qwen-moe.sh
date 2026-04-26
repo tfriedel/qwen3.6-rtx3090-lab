@@ -3,17 +3,18 @@
 # Sibling to ./qwen.sh — the two models can run side by side (different
 # container, port, GPUs) as long as combined GPU layout fits.
 #
-#   ./qwen-moe.sh start tp1    # vLLM/AWQ 20K text, ~18 TPS, 1× GPU (launch-bound)
-#   ./qwen-moe.sh start tp2    # vLLM/AWQ 200K + vision, ~149 TPS, 2× GPU (max throughput)
-#   ./qwen-moe.sh start gguf   # llama.cpp/IQ4_XS 128K text, ~117 TPS, 1× GPU (single-GPU sweet spot)
+#   ./qwen-moe.sh start tp1       # vLLM/AWQ 20K text, ~18 TPS, 1× GPU (launch-bound; don't)
+#   ./qwen-moe.sh start tp2       # vLLM/AWQ 200K + vision, ~149 TPS, 2× GPU (GPUs 0-1)
+#   ./qwen-moe.sh start tp2-mtp   # vLLM/AWQ + MTP-3 + no-prefix-cache, ~179/264/200 TPS, 2× GPU (GPUs 1-2)
+#   ./qwen-moe.sh start gguf      # llama.cpp/IQ4_XS 128K text, ~117 TPS, 1× GPU (single-GPU sweet spot)
 #   ./qwen-moe.sh stop
 #   ./qwen-moe.sh status
 #   ./qwen-moe.sh logs
 #   ./qwen-moe.sh restart <mode>
 #
 # Endpoints:
-#   tp1, tp2:  http://localhost:8021/v1  (model name: qwen3.6-35b-a3b-awq)
-#   gguf:      http://localhost:8022/v1  (model name: qwen3.6-35b-a3b-gguf)
+#   tp1, tp2, tp2-mtp:  http://localhost:8021/v1  (model name: qwen3.6-35b-a3b-awq)
+#   gguf:               http://localhost:8022/v1  (model name: qwen3.6-35b-a3b-gguf)
 #
 # Coexistence with the 27B (./qwen.sh):
 #   - tp1 (1× GPU 0): leaves GPUs 1-3 free for 27B (default/text uses 1 GPU)
@@ -29,24 +30,28 @@ COMPOSE_DIR="${REPO_DIR}/compose"
 declare -A MODE_FILE=(
   [tp1]="docker-compose.35b-a3b-awq-tp1.yml"
   [tp2]="docker-compose.35b-a3b-awq.yml"
+  [tp2-mtp]="docker-compose.35b-a3b-awq-mtp.yml"
   [gguf]="docker-compose.35b-a3b-gguf.yml"
 )
 
 declare -A MODE_CONTAINER=(
   [tp1]="vllm-qwen36-35b-a3b"
   [tp2]="vllm-qwen36-35b-a3b"
+  [tp2-mtp]="vllm-qwen36-35b-a3b"
   [gguf]="llamacpp-qwen36-35b-a3b"
 )
 
 declare -A MODE_URL=(
   [tp1]="http://localhost:8021"
   [tp2]="http://localhost:8021"
+  [tp2-mtp]="http://localhost:8021"
   [gguf]="http://localhost:8022"
 )
 
 declare -A MODE_DESC=(
   [tp1]="vLLM/AWQ — 20K ctx, text-only, ~18 TPS (launch-bound), 1× GPU"
   [tp2]="vLLM/AWQ — 200K ctx + vision + tools, ~149 TPS, 2× GPU (GPUs 0-1)"
+  [tp2-mtp]="vLLM/AWQ + MTP-3 (no prefix cache) — ~179/264/200 TPS narrative/code/explain, 2× GPU (GPUs 1-2)"
   [gguf]="llama.cpp/IQ4_XS — 128K ctx, text-only, ~117 TPS (single-GPU sweet spot), 1× GPU"
 )
 
@@ -93,8 +98,8 @@ current_mode() {
 }
 
 cmd_modes() {
-  for m in tp1 tp2 gguf; do
-    printf "  %-5s %s\n" "$m" "${MODE_DESC[$m]}"
+  for m in tp1 tp2 tp2-mtp gguf; do
+    printf "  %-8s %s\n" "$m" "${MODE_DESC[$m]}"
   done
 }
 
