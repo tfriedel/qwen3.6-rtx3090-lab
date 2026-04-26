@@ -1,5 +1,7 @@
 # Qwen3.6 local inference lab — RTX 3090 × 4
 
+> Originally forked from [`noonghunna/qwen36-27b-single-3090`](https://github.com/noonghunna/qwen36-27b-single-3090) (single-3090 vLLM recipe for the dense 27B). This repo vendors that recipe under `qwen36-27b-single-3090/`, fixes its post-2026-04-24 breakage, and extends it with multi-GPU 27B variants (`tp2`, `tp4`) and a full Qwen3.6-35B-A3B MoE stack (vLLM AWQ + llama.cpp GGUF + MTP-3 speculative-decode). The original repo's history is dropped because the local edits diverge significantly; commits, attributions, and rationale for every change are documented in [`FINDINGS.md`](./FINDINGS.md).
+
 Local OpenAI-compatible endpoints for **Qwen3.6-27B (dense)** and **Qwen3.6-35B-A3B (MoE)** on a workstation with 4× RTX 3090. Documents which inference engine and quantization is the right choice for each GPU count and workload, with measured TPS and GPU-saturation numbers backing every recommendation. Full technical writeup in [`FINDINGS.md`](./FINDINGS.md).
 
 Two launcher scripts, two endpoints (run independently or side-by-side):
