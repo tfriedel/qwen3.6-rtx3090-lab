@@ -13,8 +13,15 @@
 
 set -euo pipefail
 
-REPO_DIR="/home/thomas/projects/qwen3.6/qwen36-27b-single-3090"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+REPO_DIR="${SCRIPT_DIR}/qwen36-27b-single-3090"
 COMPOSE_DIR="${REPO_DIR}/compose"
+
+if [[ ! -d "$COMPOSE_DIR" ]]; then
+  echo "ERROR: compose dir not found at $COMPOSE_DIR" >&2
+  echo "  Expected layout: <this-script> alongside qwen36-27b-single-3090/compose/" >&2
+  exit 1
+fi
 CONTAINER="vllm-qwen36-27b"
 URL="http://localhost:8020"
 
