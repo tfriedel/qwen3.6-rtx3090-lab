@@ -14,6 +14,7 @@ Both shipped variants of the recipe were brought up successfully on one 3090. Th
 | Tools-text (`...tools-text.yml`)   | 75 K    | **68–72 / 92**                    | 22.1 GB  | No                | fp8_e5m2 KV; no vision; needle recall verified at 70K |
 | Long-ctx (`...longctx-experimental`)| 125 K   | **30–33 / 42**                    | 24.1 GB  | Yes               | TurboQuant 3-bit KV; needs `--enforce-eager` |
 | **TP=2** (`...tp2.yml`, local addition)| 100 K | **90–96 / 120**                  | 22.4 GB × 2 | No            | 2× RTX 3090 tensor-parallel; fp8_e5m2; KV pool 172K tokens; needle verified at 90K; **TPS sweet spot** |
+| TP=2 + MTP-3 no-prefix-cache (`...tp2-mtp.yml`, local addition) | 100 K | **94–97 / 122–125** | 22.4 GB × 2 | No | Same as `tp2` minus prefix cache; +5–8 % over `tp2`; throughput-only variant, prefix-cache benefits lost |
 | **TP=4** (`...tp4.yml`, local addition)| 500 K | **88–97 / 117**                  | 22.4 GB × 4 | No            | 4× RTX 3090 tensor-parallel; fp8_e5m2; KV pool 507K tokens; needle verified at **470K** (475 s) |
 
 Both expose the same OpenAI-compatible endpoint at `http://localhost:8020/v1/*`, model name `qwen3.6-27b-autoround`. Tool calling, vision, MTP spec-decode (n=3), streaming, thinking — all functional.
@@ -156,6 +157,28 @@ MTP avg:   54–62%
 ```
 
 Long-context smoke: 90,053-token prompt → 14 tokens generated in 70.7 s, needle recalled correctly.
+
+### TP=2 + MTP-3 + no-prefix-cache on the dense 27B (`compose/docker-compose.tp2-mtp.yml`, local addition)
+
+Date: 2026-05-06. Motivated by an [r/LocalLLaMA post](https://www.reddit.com/r/LocalLLaMA/comments/1t5dya8/) running `Peutlefaire/Qwen3.6-27B-NVFP4` on a single RTX 5090 with MTP-3 + `--no-enable-prefix-caching`. NVFP4 is Blackwell-only and won't run on Ampere, but the vLLM flag combo applies to our AutoRound-INT4 weights too. The MoE `tp2-mtp` had already validated the same pattern (+20–77 % over the MoE `tp2` baseline); this experiment isolates the same toggle for the dense 27B.
+
+Single flag delta vs `tp2.yml`: `--no-enable-prefix-caching` (was on) plus `--max-num-batched-tokens 4096` (was 4128, matching MoE/Reddit). MTP-3 was already in `tp2.yml`, so this is a clean A/B on prefix-cache only.
+
+Bench (same hardware, same `bench.sh`, immediately back-to-back):
+
+| Metric | `tp2` (cache ON) | `tp2-mtp` (cache OFF) | Δ |
+|---|---:|---:|---:|
+| Narrative TPS (3-run mean) | 91.2 | **96.1** | **+5.4 %** |
+| Code TPS (2-run mean) | 114.5 | **123.6** | **+8.0 %** |
+| MTP mean accept length | 2.66–3.06 | 2.61–3.38 | flat |
+| MTP avg draft acceptance | 55–69 % | 53–80 % | flat |
+| Per-card load | 22.4 GB / 84 % / 340 W | 22.4 GB / 80–94 % / 345 W | flat |
+
+Per-run narrative: 90.5 / 89.3 / 93.9 → 97.3 / 96.3 / 94.6. Per-run code: 115.5 / 113.4 → 122.3 / 124.8. Both metrics improve in every individual sample — the +5–8 % is real, not noise.
+
+The gain is **dramatically smaller** than the MoE `tp2-mtp` saw (+20–77 %). The reason is that the MoE A/B compared *no MTP + cache ON* vs *MTP-3 + cache OFF* — two changes at once, and most of the uplift was MTP itself. Our dense 27B `tp2.yml` already runs MTP-3 with cache ON, so toggling cache off isolates only the cache-management overhead, which on the dense 27B is a small slice of decode time. MTP acceptance and GPU utilisation are unchanged, consistent with the bottleneck being scheduler bookkeeping rather than compute.
+
+**Recommendation:** keep `tp2` as the documented default. `tp2-mtp` is net positive for raw throughput but the +5–8 % is too small to outweigh prefix-cache benefits on long-system-prompt agentic workflows (per vllm #38182, MTP drops cache hit rate ≈92 % → ≈71 %; on repeated long prompts the cache speedup beats the compute speedup). Use `tp2-mtp` only for stateless throughput-bound batch jobs where each request is fresh and prefix-cache cannot help.
 
 ### TP=4 multi-GPU variant (`compose/docker-compose.tp4.yml`, local addition)
 
@@ -467,6 +490,7 @@ qwen36-27b-single-3090/compose/docker-compose.yml                       (modifie
 qwen36-27b-single-3090/compose/docker-compose.tools-text.yml            (modified)
 qwen36-27b-single-3090/compose/docker-compose.longctx-experimental.yml  (modified)
 qwen36-27b-single-3090/compose/docker-compose.tp2.yml                   (new — 2-GPU variant, TPS sweet spot)
+qwen36-27b-single-3090/compose/docker-compose.tp2-mtp.yml                (new — 2-GPU variant, MTP-3 + no-prefix-cache, +5–8 % over tp2)
 qwen36-27b-single-3090/compose/docker-compose.tp4.yml                   (new — 4-GPU variant, max context)
 qwen36-27b-single-3090/compose/docker-compose.35b-a3b-awq.yml           (new — MoE vLLM TP=2, 200K ctx, 2× GPU recommended)
 qwen36-27b-single-3090/compose/docker-compose.35b-a3b-awq-mtp.yml       (new — MoE vLLM TP=2 + MTP-3 + no-prefix-cache, 179–264 TPS, GPUs 1-2)

@@ -1,0 +1,110 @@
+# ===========================================================================
+# EXPERIMENT: Qwen3.6-27B (dense) — vLLM AutoRound TP=2 + MTP-3 + prefix-cache OFF
+#
+# Hypothesis: the same flag combo that gave the MoE tp2-mtp +20–77 % over its
+# tp2 baseline (179/264/200 vs 149 TPS narrative/code/explain) also lifts the
+# dense 27B over its current `tp2` baseline (90–96 narr / 120 code TPS).
+#
+# Mechanism: MTP draft tokens drop prefix-cache hit rate ≈92 % → ≈71 %
+# (vllm #38182). With prefix caching ON the cache-loss penalty masks the
+# compute speedup; with it OFF the speedup is realized cleanly.
+#
+# Inspired by r/LocalLLaMA "Qwen3.6 27B NVFP4 + MTP on a single RTX 5090"
+# (post 1t5dya8) — same recipe, just on the AutoRound INT4 weights that work
+# on Ampere. NVFP4 itself is Blackwell-only and won't run here.
+#
+# Tradeoff vs `tp2`:
+#   + Higher single-shot decode TPS (expected)
+#   - No prefix-cache benefit on repeated long-system-prompt sessions
+# So `tp2` stays the recommended default for agentic workflows; `tp2-mtp` is
+# for raw throughput.
+#
+# Run:
+#   ./qwen.sh start tp2-mtp
+# ===========================================================================
+services:
+  vllm-qwen36-27b:
+    image: vllm/vllm-openai@sha256:9bba4628a3b943e0dd33caefb94b811569ba1e97bdf23bee19a265c31b947ccb
+    container_name: vllm-qwen36-27b
+    restart: "no"
+    ports:
+      - "8020:8000"
+    volumes:
+      - ${MODEL_DIR:-../models}:/root/.cache/huggingface
+      - ../patches/patch_tolist_cudagraph.py:/patches/patch_tolist_cudagraph.py:ro
+    environment:
+      - CUDA_VISIBLE_DEVICES=0,1
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+      - VLLM_WORKER_MULTIPROC_METHOD=spawn
+      - NCCL_CUMEM_ENABLE=0
+      - NCCL_P2P_DISABLE=1
+      - NCCL_IB_DISABLE=1
+      - VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=1
+      - VLLM_NO_USAGE_STATS=1
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:512
+      - VLLM_FLOAT32_MATMUL_PRECISION=high
+      - VLLM_USE_FLASHINFER_SAMPLER=1
+      - OMP_NUM_THREADS=1
+      - CUDA_DEVICE_MAX_CONNECTIONS=8
+      - VLLM_ALLOW_LONG_MAX_MODEL_LEN=1
+      - VLLM_MARLIN_USE_ATOMIC_ADD=1
+    shm_size: "24gb"
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        set -e
+        pip install xxhash -q
+        python3 /patches/patch_tolist_cudagraph.py || true
+        exec vllm serve "$@"
+      - --
+    command:
+      - --model
+      - /root/.cache/huggingface/qwen3.6-27b-autoround-int4
+      - --served-model-name
+      - qwen3.6-27b-autoround
+      - --quantization
+      - auto_round
+      - --dtype
+      - float16
+      - --tensor-parallel-size
+      - "2"
+      - --max-model-len
+      - "100000"
+      - --gpu-memory-utilization
+      - "0.93"
+      - --max-num-seqs
+      - "2"
+      # 4096 (vs 4128 in tp2.yml) — matches the MoE tp2-mtp setting and the
+      # r/LocalLLaMA single-5090 NVFP4 setup; vLLM warns 4096 may be slightly
+      # suboptimal for MTP, but bumping further (8192) produced no gain on the
+      # MoE A/B, so keep 4096 to isolate the prefix-cache delta.
+      - --max-num-batched-tokens
+      - "4096"
+      - --kv-cache-dtype
+      - fp8_e5m2
+      - --trust-remote-code
+      - --reasoning-parser
+      - qwen3
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - qwen3_coder
+      # The two flags that differ from tp2.yml:
+      #   --no-enable-prefix-caching   (was --enable-prefix-caching)
+      #   speculative-config           (already present in tp2.yml — kept identical)
+      - --speculative-config
+      - '{"method":"mtp","num_speculative_tokens":3}'
+      - --no-enable-prefix-caching
+      - --enable-chunked-prefill
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
