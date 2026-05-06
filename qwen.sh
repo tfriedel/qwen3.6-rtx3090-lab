@@ -4,6 +4,9 @@
 #   ./qwen.sh start default   # 20 K context + vision
 #   ./qwen.sh start text      # 75 K context, no vision
 #   ./qwen.sh start longctx   # 125 K context (slower, eager mode)
+#   ./qwen.sh start tp2       # 100 K context, 2× GPU (TPS sweet-spot)
+#   ./qwen.sh start tp4       # 500 K context, 4× GPU
+#   ./qwen.sh start bf16-tp4  # 100 K context, bf16 — quality ceiling, 4× GPU
 #   ./qwen.sh stop
 #   ./qwen.sh status
 #   ./qwen.sh logs            # follow container logs
@@ -31,6 +34,7 @@ declare -A MODE_FILE=(
   [longctx]="docker-compose.longctx-experimental.yml"
   [tp2]="docker-compose.tp2.yml"
   [tp4]="docker-compose.tp4.yml"
+  [bf16-tp4]="docker-compose.bf16-tp4.yml"
 )
 
 declare -A MODE_DESC=(
@@ -39,6 +43,7 @@ declare -A MODE_DESC=(
   [longctx]="125K ctx + vision + tools (~30-42 TPS, eager, 1× GPU)"
   [tp2]="100K ctx + vision + tools (TPS sweet-spot, 2× GPU)"
   [tp4]="500K ctx + vision + tools (max context, 4× GPU)"
+  [bf16-tp4]="100K ctx, bf16, no vision (quality ceiling, 4× GPU)"
 )
 
 usage() {
@@ -74,8 +79,8 @@ current_mode() {
 }
 
 cmd_modes() {
-  for m in default text longctx tp2 tp4; do
-    printf "  %-8s %s\n" "$m" "${MODE_DESC[$m]}"
+  for m in default text longctx tp2 tp4 bf16-tp4; do
+    printf "  %-9s %s\n" "$m" "${MODE_DESC[$m]}"
   done
 }
 

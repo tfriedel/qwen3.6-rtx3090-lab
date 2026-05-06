@@ -1,0 +1,98 @@
+# ===========================================================================
+# 4× RTX 3090 bf16 ceiling variant — full-precision Qwen3.6-27B for the
+# top-of-line quality benchmark. Use this only to measure the gap between
+# our int4 quants and "what the model is actually capable of".
+#
+# VRAM math:
+#   • 27B params × 2 bytes (bf16) = 54 GB → 13.5 GB/card with TP=4
+#   • Activations + cudagraph buffers ≈ 2–3 GB/card
+#   • KV (fp8_e5m2, --language-model-only): ~7–8 GB/card free → ~150K-token
+#     KV pool at 100K max-model-len
+#
+# Trade-offs:
+#   + Highest possible quality on this hardware (no quant noise)
+#   - All 4 cards committed
+#   - Slowest decode TPS of any variant — TP=4 PCIe all-reduce + 2× the
+#     weight bandwidth of int4. Expect roughly 30–50% of int4-tp2 TPS.
+#   - No MTP speculative decode — the base Qwen3.6-27B doesn't ship an MTP
+#     head; only the autoround quant does.
+#
+# Run with:
+#   cd compose
+#   docker compose -f docker-compose.bf16-tp4.yml up -d
+# ===========================================================================
+services:
+  vllm-qwen36-27b:
+    image: vllm/vllm-openai@sha256:9bba4628a3b943e0dd33caefb94b811569ba1e97bdf23bee19a265c31b947ccb
+    container_name: vllm-qwen36-27b
+    restart: "no"
+    ports:
+      - "8020:8000"
+    volumes:
+      - ${MODEL_DIR:-../models}:/root/.cache/huggingface
+      - ../patches/patch_tolist_cudagraph.py:/patches/patch_tolist_cudagraph.py:ro
+    environment:
+      - CUDA_VISIBLE_DEVICES=0,1,2,3
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+      - VLLM_WORKER_MULTIPROC_METHOD=spawn
+      - NCCL_CUMEM_ENABLE=0
+      - NCCL_P2P_DISABLE=1
+      - NCCL_IB_DISABLE=1
+      - VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=1
+      - VLLM_NO_USAGE_STATS=1
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:512
+      - VLLM_FLOAT32_MATMUL_PRECISION=high
+      - VLLM_USE_FLASHINFER_SAMPLER=1
+      - OMP_NUM_THREADS=1
+      - CUDA_DEVICE_MAX_CONNECTIONS=8
+      - VLLM_ALLOW_LONG_MAX_MODEL_LEN=1
+    shm_size: "32gb"
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        set -e
+        pip install xxhash -q
+        python3 /patches/patch_tolist_cudagraph.py || true
+        exec vllm serve "$@"
+      - --
+    command:
+      - --model
+      - /root/.cache/huggingface/Qwen3.6-27B
+      - --served-model-name
+      - qwen3.6-27b-bf16
+      - --dtype
+      - bfloat16
+      - --tensor-parallel-size
+      - "4"
+      - --max-model-len
+      - "100000"
+      - --gpu-memory-utilization
+      - "0.92"
+      - --max-num-seqs
+      - "1"
+      - --max-num-batched-tokens
+      - "4128"
+      - --kv-cache-dtype
+      - fp8_e5m2
+      - --language-model-only
+      - --trust-remote-code
+      - --reasoning-parser
+      - qwen3
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - qwen3_coder
+      - --enable-prefix-caching
+      - --enable-chunked-prefill
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
