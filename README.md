@@ -1,6 +1,6 @@
 # Qwen3.6 local inference lab — RTX 3090 × 4
 
-> Originally forked from [`noonghunna/qwen36-27b-single-3090`](https://github.com/noonghunna/qwen36-27b-single-3090) (single-3090 vLLM recipe for the dense 27B). This repo vendors that recipe under `qwen36-27b-single-3090/`, fixes its post-2026-04-24 breakage, and extends it with multi-GPU 27B variants (`tp2`, `tp4`) and a full Qwen3.6-35B-A3B MoE stack (vLLM AWQ + llama.cpp GGUF + MTP-3 speculative-decode). The original repo's history is dropped because the local edits diverge significantly; commits, attributions, and rationale for every change are documented in [`FINDINGS.md`](./FINDINGS.md).
+> Originally forked from [`noonghunna/qwen36-27b-single-3090`](https://github.com/noonghunna/qwen36-27b-single-3090) (single-3090 vLLM recipe for the dense 27B). This repo vendors that recipe under `qwen36-27b-single-3090/`, fixes its post-2026-04-24 breakage, and extends it with multi-GPU 27B variants (`tp2`, `tp4`, `tp4-2`) and a full Qwen3.6-35B-A3B MoE stack (vLLM AWQ + llama.cpp GGUF + MTP-3 speculative-decode). The original repo's history is dropped because the local edits diverge significantly; commits, attributions, and rationale for every change are documented in [`FINDINGS.md`](./FINDINGS.md).
 
 Local OpenAI-compatible endpoints for **Qwen3.6-27B (dense)** and **Qwen3.6-35B-A3B (MoE)** on a workstation with 4× RTX 3090. Documents which inference engine and quantization is the right choice for each GPU count and workload, with measured TPS and GPU-saturation numbers backing every recommendation. Full technical writeup in [`FINDINGS.md`](./FINDINGS.md).
 
@@ -16,7 +16,7 @@ Two launcher scripts, two endpoints (run independently or side-by-side):
 | Mode | Engine / quant | GPUs | Max ctx | Decode TPS | Vision | When to use |
 |---|---|---|---|---|---|---|
 | `qwen.sh start tp2` | vLLM / Lorbus AutoRound INT4 | 2× 3090 | 100K | 90–96 narr / 120 code | ✅ | **27B sweet spot** — best dense quality on this rig |
-| `qwen.sh start tp4` | vLLM / AutoRound INT4 | 4× 3090 | **500K** | 88–97 / 117 | ✅ | only when you need >100K ctx — same TPS as tp2 |
+| `qwen.sh start tp4` | vLLM / AutoRound INT4 | 4× 3090 | **500K** | 88–97 / 117 | ✅ | only when you need >100K ctx — single session | | `qwen.sh start tp4-2` | vLLM / AutoRound INT4 | 4× 3090 | **500K** | ~90 per session (114 combined) | ✅ | **two concurrent sessions** — zero-overhead parallel decode |
 | `qwen-moe.sh start gguf` | llama.cpp / Unsloth IQ4_XS GGUF | 1× 3090 | 128K | **115–133** | ❌ | **MoE single-GPU sweet spot** — 96% SM util |
 | `qwen-moe.sh start tp2` | vLLM / cyankiwi AWQ-INT4 | 2× 3090 | 200K | **149** | ✅ | MoE with vision + tools |
 | `qwen-moe.sh start tp2-mtp` | vLLM / AWQ + MTP-3 + no-prefix-cache | 2× 3090 | 200K | **179 narr / 264 code / 200 explain** | ✅ | MoE max throughput (no prefix cache) |
@@ -36,6 +36,9 @@ cd ~/projects/qwen3.6
 
 # MoE on 2 GPUs with MTP — fastest dense throughput
 ./qwen-moe.sh start tp2-mtp
+
+# 27B on 4 GPUs with 2 concurrent sessions (pi multi-session setup)
+./qwen.sh start tp4-2
 
 ./qwen.sh status            # 27B status
 ./qwen-moe.sh status        # MoE status
@@ -57,7 +60,7 @@ Both endpoints are OpenAI-compatible; any non-empty API key is accepted. The MoE
 | `text`    | 1    | 75 K    | 68–72 / 92        | no     | yes   | `fp8_e5m2`         | long documents, code review, no images |
 | `longctx` | 1    | 125 K   | 30–33 / 42        | yes    | yes   | `turboquant_3bit_nc` | full-repo + vision on a single card |
 | **`tp2`** | 2    | 100 K   | **90–96 / 120**   | yes    | yes   | `fp8_e5m2`         | **TPS sweet spot — recommended default** |
-| `tp4`     | 4    | 500 K   | 88–97 / 117       | yes    | yes   | `fp8_e5m2`         | only when you need >100K ctx — needle verified at **470K** (475 s) |
+| `tp4`     | 4    | 500 K   | 88–97 / 117       | yes    | yes   | `fp8_e5m2`         | only when you need >100K ctx — needle verified at **470K** (475 s) | | `tp4-2`   | 4    | 500 K   | ~90 per session (114 combined) | yes    | yes   | `fp8_e5m2`         | **two concurrent sessions** — parallel decode with ~1–2% per-session slowdown |
 
 ### 35B-A3B (MoE), via `qwen-moe.sh`
 
@@ -111,7 +114,7 @@ This **does not contradict** the negative finding for **llama.cpp draft-then-ver
 qwen3.6/
 ├── README.md                   this file
 ├── FINDINGS.md                 full technical writeup with bench data
-├── qwen.sh                     27B launcher (modes: default text longctx tp2 tp4)
+├── qwen.sh                     27B launcher (modes: default text longctx tp2 tp4 tp4-2 bf16-tp4)
 ├── qwen-moe.sh                 MoE launcher (modes: gguf tp1 tp2 tp2-mtp)
 └── qwen36-27b-single-3090/     vendored fork of the noonghunna recipe
     ├── compose/
@@ -120,6 +123,7 @@ qwen3.6/
     │   ├── docker-compose.longctx-experimental.yml  27B 125K + vision (1 GPU, eager)
     │   ├── docker-compose.tp2.yml                   27B 100K + vision (2 GPUs)
     │   ├── docker-compose.tp4.yml                   27B 500K + vision (4 GPUs)
+    │   ├── docker-compose.tp4-2.yml                 27B 500K + vision, 2 sessions (4 GPUs)
     │   ├── docker-compose.35b-a3b-awq-tp1.yml       MoE vLLM AWQ 1 GPU (anti-pattern)
     │   ├── docker-compose.35b-a3b-awq.yml           MoE vLLM AWQ 200K (2 GPUs)
     │   ├── docker-compose.35b-a3b-awq-mtp.yml       MoE vLLM AWQ + MTP-3 (2 GPUs)
