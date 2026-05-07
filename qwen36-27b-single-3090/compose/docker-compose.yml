@@ -24,8 +24,11 @@
 # ===========================================================================
 services:
   vllm-qwen36-27b:
-    # Pinned to the exact nightly we tested and the Genesis patches verified against.
-    image: vllm/vllm-openai@sha256:9bba4628a3b943e0dd33caefb94b811569ba1e97bdf23bee19a265c31b947ccb
+    # Pinned to vLLM nightly 2026-05-07 (commit 51f22dcfd068fe8f1e3192da2a1e825b930223cf).
+    # Bumped from 2026-04-20 to pick up PR #35687 (merged 2026-04-24): "Treat <tool_call> as
+    # implicit reasoning end in Qwen3 parser" — fixes silent tool-call drops when the model
+    # emits <tool_call> without closing </think>. See ../../TOOL_CALLING_ISSUES.md.
+    image: vllm/vllm-openai@sha256:9b534fe66daf152e8ceca8a7f8e14c18105aaf6ddabc61eb17730d85b4c7c194
     container_name: vllm-qwen36-27b
     restart: "no"
     ports:
@@ -39,6 +42,7 @@ services:
       # attention or tool calls misbehave, mount the new plugin instead.
       # - ../patches/genesis/patch_genesis_unified.py:/patches/patch_genesis_unified.py:ro
       - ../patches/patch_tolist_cudagraph.py:/patches/patch_tolist_cudagraph.py:ro
+      - ../patches/templates/qwen3.6-enhanced.jinja:/patches/templates/qwen3.6-enhanced.jinja:ro
     environment:
       # Uncomment the next line to pin to a specific GPU (e.g. GPU 0):
       - CUDA_VISIBLE_DEVICES=0
@@ -101,6 +105,8 @@ services:
       - --kv-cache-dtype
       - fp8_e5m2
       - --trust-remote-code
+      - --chat-template
+      - /patches/templates/qwen3.6-enhanced.jinja
       - --reasoning-parser
       - qwen3
       - --enable-auto-tool-choice

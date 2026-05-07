@@ -58,7 +58,7 @@ services:
     # Patch 12 (Qwen3 tool_call fix) logs [FAILED] and tool calling silently
     # breaks (model emits <tool_call>...</tool_call> as plain text instead of
     # populating tool_calls[] in the API response).
-    image: vllm/vllm-openai@sha256:9bba4628a3b943e0dd33caefb94b811569ba1e97bdf23bee19a265c31b947ccb
+    image: vllm/vllm-openai@sha256:9b534fe66daf152e8ceca8a7f8e14c18105aaf6ddabc61eb17730d85b4c7c194
     container_name: vllm-qwen36-27b
     restart: "no"
     ports:
@@ -71,6 +71,7 @@ services:
       - ../patches/genesis/vllm/_genesis:/usr/local/lib/python3.12/dist-packages/vllm/_genesis:ro
       - ../patches/genesis/genesis_vllm_plugin:/plugin:ro
       - ../patches/patch_tolist_cudagraph.py:/patches/patch_tolist_cudagraph.py:ro
+      - ../patches/templates/qwen3.6-enhanced.jinja:/patches/templates/qwen3.6-enhanced.jinja:ro
     environment:
       # Uncomment the next line to pin to a specific GPU (e.g. GPU 0):
       - CUDA_VISIBLE_DEVICES=0
@@ -139,6 +140,8 @@ services:
       - --kv-cache-dtype
       - turboquant_3bit_nc
       - --trust-remote-code
+      - --chat-template
+      - /patches/templates/qwen3.6-enhanced.jinja
       - --reasoning-parser
       - qwen3
       - --enable-auto-tool-choice

@@ -15,7 +15,7 @@
 # ===========================================================================
 services:
   vllm-qwen36-35b-a3b:
-    image: vllm/vllm-openai@sha256:9bba4628a3b943e0dd33caefb94b811569ba1e97bdf23bee19a265c31b947ccb
+    image: vllm/vllm-openai@sha256:9b534fe66daf152e8ceca8a7f8e14c18105aaf6ddabc61eb17730d85b4c7c194
     container_name: vllm-qwen36-35b-a3b
     restart: "no"
     ports:
@@ -23,6 +23,7 @@ services:
     volumes:
       - ${MODEL_DIR:-../models}:/root/.cache/huggingface
       - ../patches/patch_tolist_cudagraph.py:/patches/patch_tolist_cudagraph.py:ro
+      - ../patches/templates/qwen3.6-enhanced.jinja:/patches/templates/qwen3.6-enhanced.jinja:ro
     environment:
       - CUDA_VISIBLE_DEVICES=0,1
       - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
@@ -78,6 +79,8 @@ services:
       # KV cache stays at default (fp16) — vLLM's compressed-tensors MoE path
       # rejects fp8_e5m2 KV. Fine: 40 layers × 2 KV heads × 256 head_dim → ~5 GB at 64K ctx.
       - --trust-remote-code
+      - --chat-template
+      - /patches/templates/qwen3.6-enhanced.jinja
       - --reasoning-parser
       - qwen3
       - --enable-auto-tool-choice
