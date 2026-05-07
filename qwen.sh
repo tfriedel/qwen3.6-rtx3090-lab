@@ -36,6 +36,7 @@ declare -A MODE_FILE=(
   [tp2]="docker-compose.tp2.yml"
   [tp2-mtp]="docker-compose.tp2-mtp.yml"
   [tp4]="docker-compose.tp4.yml"
+  [tp4-2]="docker-compose.tp4-2.yml"
   [bf16-tp4]="docker-compose.bf16-tp4.yml"
 )
 
@@ -46,6 +47,7 @@ declare -A MODE_DESC=(
   [tp2]="100K ctx + vision + tools (TPS sweet-spot, 2× GPU)"
   [tp2-mtp]="100K ctx + MTP-3 + no-prefix-cache (throughput experiment, 2× GPU)"
   [tp4]="500K ctx + vision + tools (max context, 4× GPU)"
+  [tp4-2]="500K ctx + vision + tools (2 concurrent sessions, 4× GPU)"
   [bf16-tp4]="100K ctx, bf16, no vision (quality ceiling, 4× GPU)"
 )
 
@@ -54,7 +56,7 @@ usage() {
 Usage: $0 <command> [args]
 
 Commands:
-  start <mode>     Bring up a variant (modes: default, text, longctx)
+  start <mode>     Bring up a variant (modes: default, text, longctx, tp2, tp2-mtp, tp4, tp4-2, bf16-tp4)
   stop             Stop and remove the running container
   restart <mode>   stop && start <mode>
   status           Show what's currently up
@@ -82,7 +84,7 @@ current_mode() {
 }
 
 cmd_modes() {
-  for m in default text longctx tp2 tp2-mtp tp4 bf16-tp4; do
+  for m in default text longctx tp2 tp2-mtp tp4 tp4-2 bf16-tp4; do
     printf "  %-9s %s\n" "$m" "${MODE_DESC[$m]}"
   done
 }
