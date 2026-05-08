@@ -1,0 +1,24 @@
+=== Warmup (3x) ===
+  w1           comp=1000 wall=34.09s   29.33 TPS
+  w2           comp=1000 wall=10.52s   95.06 TPS
+  w3           comp=1000 wall=10.25s   97.56 TPS
+
+=== Narrative (3x, 1000 tok) ===
+  narr1        comp=1000 wall=10.80s   92.59 TPS
+  narr2        comp=1000 wall=10.99s   90.99 TPS
+  narr3        comp=1000 wall=10.90s   91.74 TPS
+
+=== Code (2x, 800 tok) ===
+  code1        comp=692  wall= 5.78s  119.72 TPS
+  code2        comp=686  wall= 5.65s  121.42 TPS
+
+=== GPU state ===
+0, 63 %, 23232 MiB, 24576 MiB, 263.20 W, 78
+1, 70 %, 23248 MiB, 24576 MiB, 248.97 W, 68
+2, 84 %, 23248 MiB, 24576 MiB, 260.49 W, 76
+3, 86 %, 23168 MiB, 24576 MiB, 242.24 W, 57
+
+=== Last 3 SpecDecoding metrics (MTP accept) ===
+(APIServer pid=1) INFO 05-08 22:28:12 [metrics.py:101] SpecDecoding metrics: Mean acceptance length: 2.69, Accepted throughput: 57.90 tokens/s, Drafted throughput: 102.89 tokens/s, Accepted: 579 tokens, Drafted: 1029 tokens, Per-position acceptance rate: 0.799, 0.534, 0.356, Avg Draft acceptance rate: 56.3%
+(APIServer pid=1) INFO 05-08 22:28:22 [metrics.py:101] SpecDecoding metrics: Mean acceptance length: 2.59, Accepted throughput: 55.60 tokens/s, Drafted throughput: 104.70 tokens/s, Accepted: 556 tokens, Drafted: 1047 tokens, Per-position acceptance rate: 0.782, 0.501, 0.309, Avg Draft acceptance rate: 53.1%
+(APIServer pid=1) INFO 05-08 22:28:32 [metrics.py:101] SpecDecoding metrics: Mean acceptance length: 2.77, Accepted throughput: 61.59 tokens/s, Drafted throughput: 104.39 tokens/s, Accepted: 616 tokens, Drafted: 1044 tokens, Per-position acceptance rate: 0.782, 0.580, 0.408, Avg Draft acceptance rate: 59.0%

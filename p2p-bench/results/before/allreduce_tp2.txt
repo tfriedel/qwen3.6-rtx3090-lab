@@ -1,0 +1,26 @@
+# nccl-tests version 2.18.3 nccl-headers=23004 nccl-library=23004
+# Collective test starting: all_reduce_perf
+# nThread 1 nGpus 2 minBytes 4194304 maxBytes 1073741824 step: 2(factor) warmup iters: 50 iters: 5 agg iters: 1 validation: 1 graph: 0 unalign: 0
+#
+# Using devices
+#  Rank  0 Group  0 Pid 4145607 on a4000-224n3 device  0 [0000:01:00] NVIDIA GeForce RTX 3090
+#  Rank  1 Group  0 Pid 4145607 on a4000-224n3 device  1 [0000:41:00] NVIDIA GeForce RTX 3090
+#
+#                                                              out-of-place                       in-place          
+#       size         count      type   redop    root     time   algbw   busbw  #wrong     time   algbw   busbw  #wrong 
+#        (B)    (elements)                               (us)  (GB/s)  (GB/s)             (us)  (GB/s)  (GB/s)         
+     4194304       1048576     float     sum      -1   698.00    6.01    6.01       0   615.51    6.81    6.81       0
+     8388608       2097152     float     sum      -1  1236.07    6.79    6.79       0  1220.69    6.87    6.87       0
+    16777216       4194304     float     sum      -1  2379.79    7.05    7.05       0  2359.13    7.11    7.11       0
+    33554432       8388608     float     sum      -1  4826.17    6.95    6.95       0  4779.70    7.02    7.02       0
+    67108864      16777216     float     sum      -1  9668.78    6.94    6.94       0  9596.67    6.99    6.99       0
+   134217728      33554432     float     sum      -1  19228.1    6.98    6.98       0  19200.1    6.99    6.99       0
+   268435456      67108864     float     sum      -1  38236.8    7.02    7.02       0  38352.4    7.00    7.00       0
+   536870912     134217728     float     sum      -1  77120.6    6.96    6.96       0  77095.3    6.96    6.96       0
+  1073741824     268435456     float     sum      -1   156012    6.88    6.88       0   156327    6.87    6.87       0
+# Out of bounds values : 0 OK
+# Avg bus bandwidth    : 6.90091 
+#
+# Collective test concluded: all_reduce_perf
+#
+

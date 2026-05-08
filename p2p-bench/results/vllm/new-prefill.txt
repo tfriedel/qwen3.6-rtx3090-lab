@@ -1,0 +1,7 @@
+=== label: new-tp4 ===
+Warmup (small prompt)...
+ tokens_in    ttft_s   prefill_tps   decoded  decode_tps
+       837     0.278          3008         4       26.81
+      3266     1.881          1736         7       37.02
+     12978     3.342          3883         4       27.77
+     51823    13.809          3753         4       33.50

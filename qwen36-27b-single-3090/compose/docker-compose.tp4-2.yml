@@ -49,7 +49,8 @@ services:
       # P2P is unreliable on consumer 3090s without NVLink — force NCCL through
       # host memory. Without this, multi-GPU runs hang or produce corrupted
       # output during the first all-reduce.
-      - NCCL_P2P_DISABLE=1
+      - NCCL_P2P_DISABLE=0
+      - NCCL_P2P_LEVEL=PHB
       - NCCL_IB_DISABLE=1
       - VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=1
       - VLLM_NO_USAGE_STATS=1

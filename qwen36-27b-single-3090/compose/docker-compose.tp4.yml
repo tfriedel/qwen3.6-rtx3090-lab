@@ -16,10 +16,13 @@
 #   + ~4× KV memory budget → push max-model-len to 150K with vision still on
 #   + Prefill scales (more compute available across cards)
 #   + Genesis NOT required (fp8_e5m2 KV bypasses the hybrid-gate patch)
-#   - Generation TPS often LOWER than TP=1 on consumer 3090s: no NVLink, all-
-#     reduce traverses PCIe + host memory each layer (NCCL_P2P_DISABLE=1 is
-#     required because P2P is unreliable on consumer cards). Expect roughly
-#     30–50% of single-GPU decode TPS in steady state.
+#   - Generation TPS historically LOWER than TP=1 on consumer 3090s because
+#     stock NVIDIA driver disables P2P on consumer cards, forcing every all-
+#     reduce through host RAM. With the aikitoria open-gpu-kernel-modules
+#     fork (see /home/thomas/Documents/p2p-driver-install-log.md) PCIe BAR1
+#     P2P is enabled and NCCL all-reduce busbw jumps from ~6 GB/s to ~24 GB/s
+#     when NCCL_P2P_LEVEL=PHB is set (default PXB refuses cross-root-port
+#     P2P, falls back to SHM). Both env vars set below.
 #   - Whole machine is committed; can't run other GPU work simultaneously.
 #
 # Use this when you need long context (50K–150K) on a single request and
@@ -49,7 +52,8 @@ services:
       # P2P is unreliable on consumer 3090s without NVLink — force NCCL through
       # host memory. Without this, multi-GPU runs hang or produce corrupted
       # output during the first all-reduce.
-      - NCCL_P2P_DISABLE=1
+      - NCCL_P2P_DISABLE=0
+      - NCCL_P2P_LEVEL=PHB
       - NCCL_IB_DISABLE=1
       - VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=1
       - VLLM_NO_USAGE_STATS=1

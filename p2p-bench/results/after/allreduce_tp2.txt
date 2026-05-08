@@ -1,0 +1,26 @@
+# nccl-tests version 2.18.3 nccl-headers=23004 nccl-library=23004
+# Collective test starting: all_reduce_perf
+# nThread 1 nGpus 2 minBytes 4194304 maxBytes 1073741824 step: 2(factor) warmup iters: 50 iters: 5 agg iters: 1 validation: 1 graph: 0 unalign: 0
+#
+# Using devices
+#  Rank  0 Group  0 Pid  13013 on a4000-224n3 device  0 [0000:01:00] NVIDIA GeForce RTX 3090
+#  Rank  1 Group  0 Pid  13013 on a4000-224n3 device  1 [0000:41:00] NVIDIA GeForce RTX 3090
+#
+#                                                              out-of-place                       in-place          
+#       size         count      type   redop    root     time   algbw   busbw  #wrong     time   algbw   busbw  #wrong 
+#        (B)    (elements)                               (us)  (GB/s)  (GB/s)             (us)  (GB/s)  (GB/s)         
+     4194304       1048576     float     sum      -1   199.14   21.06   21.06       0   197.39   21.25   21.25       0
+     8388608       2097152     float     sum      -1   375.30   22.35   22.35       0   373.83   22.44   22.44       0
+    16777216       4194304     float     sum      -1   722.71   23.21   23.21       0   721.88   23.24   23.24       0
+    33554432       8388608     float     sum      -1  1441.43   23.28   23.28       0  1423.30   23.58   23.58       0
+    67108864      16777216     float     sum      -1  2823.09   23.77   23.77       0  2822.50   23.78   23.78       0
+   134217728      33554432     float     sum      -1  5610.65   23.92   23.92       0  5620.70   23.88   23.88       0
+   268435456      67108864     float     sum      -1  11108.7   24.16   24.16       0  11144.1   24.09   24.09       0
+   536870912     134217728     float     sum      -1  22346.2   24.03   24.03       0  22330.0   24.04   24.04       0
+  1073741824     268435456     float     sum      -1  44014.0   24.40   24.40       0  44029.9   24.39   24.39       0
+# Out of bounds values : 0 OK
+# Avg bus bandwidth    : 23.3812 
+#
+# Collective test concluded: all_reduce_perf
+#
+

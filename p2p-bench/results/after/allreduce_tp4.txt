@@ -1,0 +1,28 @@
+# nccl-tests version 2.18.3 nccl-headers=23004 nccl-library=23004
+# Collective test starting: all_reduce_perf
+# nThread 1 nGpus 4 minBytes 4194304 maxBytes 1073741824 step: 2(factor) warmup iters: 50 iters: 5 agg iters: 1 validation: 1 graph: 0 unalign: 0
+#
+# Using devices
+#  Rank  0 Group  0 Pid  11233 on a4000-224n3 device  0 [0000:01:00] NVIDIA GeForce RTX 3090
+#  Rank  1 Group  0 Pid  11233 on a4000-224n3 device  1 [0000:41:00] NVIDIA GeForce RTX 3090
+#  Rank  2 Group  0 Pid  11233 on a4000-224n3 device  2 [0000:81:00] NVIDIA GeForce RTX 3090
+#  Rank  3 Group  0 Pid  11233 on a4000-224n3 device  3 [0000:c1:00] NVIDIA GeForce RTX 3090
+#
+#                                                              out-of-place                       in-place          
+#       size         count      type   redop    root     time   algbw   busbw  #wrong     time   algbw   busbw  #wrong 
+#        (B)    (elements)                               (us)  (GB/s)  (GB/s)             (us)  (GB/s)  (GB/s)         
+     4194304       1048576     float     sum      -1  1036.18    4.05    6.07       0   994.81    4.22    6.32       0
+     8388608       2097152     float     sum      -1  1954.97    4.29    6.44       0  2025.32    4.14    6.21       0
+    16777216       4194304     float     sum      -1  3952.16    4.25    6.37       0  3937.75    4.26    6.39       0
+    33554432       8388608     float     sum      -1  7821.95    4.29    6.43       0  7898.92    4.25    6.37       0
+    67108864      16777216     float     sum      -1  15708.0    4.27    6.41       0  15660.5    4.29    6.43       0
+   134217728      33554432     float     sum      -1  31336.1    4.28    6.42       0  31407.5    4.27    6.41       0
+   268435456      67108864     float     sum      -1  63022.9    4.26    6.39       0  63010.3    4.26    6.39       0
+   536870912     134217728     float     sum      -1   126424    4.25    6.37       0   126582    4.24    6.36       0
+  1073741824     268435456     float     sum      -1   254722    4.22    6.32       0   254517    4.22    6.33       0
+# Out of bounds values : 0 OK
+# Avg bus bandwidth    : 6.35798 
+#
+# Collective test concluded: all_reduce_perf
+#
+
