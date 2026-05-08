@@ -1,0 +1,57 @@
+# ===========================================================================
+# Gemma-4-E4B-it — vLLM bf16, single 3090.
+# The "small" Gemma 4 variant (effective-4B parameters, multimodal).
+# No quantization needed — bf16 weights are ~9 GB, fits comfortably on a 3090
+# with ~14 GB headroom for KV cache and CUDA graphs.
+#
+# Endpoint: http://localhost:8025/v1  (model alias: gemma-4-e4b)
+#
+# Run:  docker compose -f docker-compose.e4b-vllm.yml up -d
+# ===========================================================================
+services:
+  vllm-gemma4-e4b:
+    image: vllm/vllm-openai:v0.19.2rc1
+    container_name: vllm-gemma4-e4b
+    restart: "no"
+    ports:
+      - "8025:8000"
+    volumes:
+      - ${MODEL_DIR:-../models}:/root/.cache/huggingface
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+      - VLLM_NO_USAGE_STATS=1
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+      - VLLM_USE_FLASHINFER_SAMPLER=1
+      - OMP_NUM_THREADS=1
+    shm_size: "8gb"
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command:
+      - --model
+      - google/gemma-4-E4B-it
+      - --served-model-name
+      - gemma-4-e4b
+      - --dtype
+      - bfloat16
+      - --tensor-parallel-size
+      - "1"
+      - --max-model-len
+      - "131072"
+      - --gpu-memory-utilization
+      - "0.85"
+      - --max-num-seqs
+      - "8"
+      - --trust-remote-code
+      - --enable-prefix-caching
+      - --enable-chunked-prefill
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"

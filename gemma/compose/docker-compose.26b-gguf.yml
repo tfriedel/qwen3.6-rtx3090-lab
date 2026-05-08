@@ -1,0 +1,92 @@
+# ===========================================================================
+# Gemma-4-26B-A4B-it — llama.cpp + Unsloth UD-Q4_K_XL GGUF — single 3090.
+#
+# Sourced from coder543's reply in the Reddit thread for the same model:
+#   https://www.reddit.com/r/LocalLLaMA/comments/1t796qe/
+# Reported: 130+ tok/s with full 262K context on a single RTX 3090.
+#
+# Key flags from that recipe:
+#   --parallel 1                # one KV slot, not the default 4
+#   --spec-type ngram-mod       # ngram-modulated spec decoding (no draft model)
+#   --spec-ngram-mod-n-{min,max,match}  # tuned per coder543's recipe
+#   --no-mmproj-offload         # vision projector stays on CPU
+#   --jinja                     # use the model's chat template
+#
+# Memory tuning notes (from arzeth's reply in same thread):
+#   --ctx-checkpoints 1         # gemma-4 checkpoints are 8 K each → big RAM hit
+#   --kv-unified                # single shared KV pool across slots
+#
+# Model files expected at $MODEL_DIR (download once, then this is offline):
+#   - gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf
+#   - mmproj-BF16.gguf  (vision projector — Unsloth ships it un-prefixed)
+#
+# To pre-fetch:
+#   huggingface-cli download unsloth/gemma-4-26B-A4B-it-GGUF \
+#     gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf \
+#     gemma-4-26B-A4B-it-UD-Q4_K_XL-mmproj-BF16.gguf \
+#     --local-dir ./models
+#
+# Endpoint: http://localhost:8024/v1  (model alias: gemma-4-26b-a4b-gguf)
+#
+# Run:  docker compose -f docker-compose.26b-gguf.yml up -d
+# ===========================================================================
+services:
+  llamacpp-gemma4-26b-a4b:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    container_name: llamacpp-gemma4-26b-a4b
+    restart: "no"
+    healthcheck:
+      disable: true
+    ports:
+      - "8024:8000"
+    volumes:
+      - ${MODEL_DIR:-../models}:/models:ro
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command:
+      - --model
+      - /models/gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf
+      - --mmproj
+      - /models/mmproj-BF16.gguf
+      - --alias
+      - gemma-4-26b-a4b-gguf
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --n-gpu-layers
+      - "999"
+      - --ctx-size
+      - "262144"
+      - --parallel
+      - "1"
+      - --kv-unified
+      - --ctx-checkpoints
+      - "1"
+      - --flash-attn
+      - "on"
+      - --jinja
+      - --no-mmproj-offload
+      - "-fit"
+      - "off"
+      # ngram-mod spec decoding (no draft model needed). The Reddit recipe used
+      # additional knobs (--spec-ngram-mod-n-{min,max,match}) that aren't in the
+      # mainline ggml image; current image exposes only --spec-ngram-size-n/m
+      # and --spec-ngram-min-hits, so we rely on ngram-mod defaults.
+      - --spec-type
+      - ngram-mod
+      # Sampling defaults from the original Reddit recipe.
+      - --temp
+      - "1.0"
+      - --top-k
+      - "64"
+      - --top-p
+      - "0.95"
+      - --no-warmup

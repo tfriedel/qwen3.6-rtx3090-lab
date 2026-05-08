@@ -4,12 +4,15 @@
 
 Local OpenAI-compatible endpoints for **Qwen3.6-27B (dense)** and **Qwen3.6-35B-A3B (MoE)** on a workstation with 4× RTX 3090. Documents which inference engine and quantization is the right choice for each GPU count and workload, with measured TPS and GPU-saturation numbers backing every recommendation. Full technical writeup in [`FINDINGS.md`](./FINDINGS.md).
 
-Two launcher scripts, two endpoints (run independently or side-by-side):
+Three launcher scripts, multiple endpoints (run independently or side-by-side, GPU layout permitting):
 
 | Model | Launcher | Endpoint | Model name (OpenAI API `model`) |
 |---|---|---|---|
 | Qwen3.6-27B (dense) | [`qwen.sh`](./qwen.sh) | `http://localhost:8020/v1` | `qwen3.6-27b-autoround` |
 | Qwen3.6-35B-A3B (MoE) | [`qwen-moe.sh`](./qwen-moe.sh) | `http://localhost:8021/v1` (vLLM) or `:8022/v1` (llama.cpp) | `qwen3.6-35b-a3b-awq` or `qwen3.6-35b-a3b-gguf` |
+| Gemma-4-26B-A4B (MoE) + Gemma-4-E4B | [`gemma.sh`](./gemma.sh) | `:8023/v1` (vLLM AWQ+DFlash) / `:8024/v1` (llama.cpp GGUF) / `:8025/v1` (E4B) | `gemma-4-26b-a4b-awq` / `gemma-4-26b-a4b-gguf` / `gemma-4-e4b` |
+
+The Gemma stack mirrors the recipe from [this LocalLLaMA post](https://www.reddit.com/r/LocalLLaMA/comments/1t796qe/gemma_4_26b_hits_600_toks_on_one_rtx_5090/) (vLLM AWQ + DFlash speculative decoding, ~578 tok/s on a 5090) plus the 3090-specific `llama.cpp + ngram-mod` recipe surfaced in the same thread (~130 tok/s, full 262K ctx). Full benchmarks, replication notes, and the four compose-file fixes needed to make the recipe run on a 3090 are documented in [`GEMMA_FINDINGS.md`](./GEMMA_FINDINGS.md).
 
 ## Headline numbers on this rig
 
@@ -20,6 +23,8 @@ Two launcher scripts, two endpoints (run independently or side-by-side):
 | `qwen-moe.sh start gguf` | llama.cpp / Unsloth IQ4_XS GGUF | 1× 3090 | 128K | **115–133** | ❌ | **MoE single-GPU sweet spot** — 96% SM util |
 | `qwen-moe.sh start tp2` | vLLM / cyankiwi AWQ-INT4 | 2× 3090 | 200K | **149** | ✅ | MoE with vision + tools |
 | `qwen-moe.sh start tp2-mtp` | vLLM / AWQ + MTP-3 + no-prefix-cache | 2× 3090 | 200K | **179 narr / 264 code / 200 explain** | ✅ | MoE max throughput (no prefix cache) |
+| `gemma.sh start gguf` | llama.cpp / Unsloth UD-Q4_K_XL GGUF + ngram-mod spec | 1× 3090 | **262K** | **127–131 flat** | ✅ | **Gemma-4 26B-A4B sweet spot** — 95% SM util, 130 TPS at 0K → 120 at 17K → 104 at 65K |
+| `gemma.sh start tp1` | vLLM / cyankiwi AWQ + z-lab DFlash-13 | 1× 3090 | 20K | 95 narr / **179 code** / 117 explain | ✅ | Gemma-4 26B-A4B short-ctx code generation only — DFlash collapses past ~16K (≈50 TPS at 17K) |
 
 Picking between dense 27B and MoE 35B-A3B at the same TP=2: the **27B wins every Qwen-published quality benchmark** by 1–10 pts (MMLU-Pro 86.2 vs 85.2, GPQA 87.8 vs 86.0, SWE-bench 77.2 vs 73.4, AIME 94.1 vs 92.7, Terminal-Bench 59.3 vs 51.5, …). The MoE wins on **speed** (~2× the TPS at the same TP=2 budget). For coding tasks where quality matters, 27B is the default; for fast/cheap calls, the MoE.
 
@@ -40,10 +45,15 @@ cd ~/projects/qwen3.6
 # 27B on 4 GPUs with 2 concurrent sessions (pi multi-session setup)
 ./qwen.sh start tp4-2
 
+# Gemma-4 26B-A4B on 1 GPU — llama.cpp ngram-mod, 130 TPS, full 262K ctx
+./gemma.sh start gguf
+
 ./qwen.sh status            # 27B status
 ./qwen-moe.sh status        # MoE status
+./gemma.sh status           # Gemma status
 ./qwen.sh modes             # list all 27B variants with descriptions
 ./qwen-moe.sh modes         # list all MoE variants
+./gemma.sh modes            # list all Gemma variants
 ./qwen.sh logs              # follow logs
 ./qwen.sh stop
 ```
@@ -70,6 +80,22 @@ Both endpoints are OpenAI-compatible; any non-empty API key is accepted. The MoE
 | `tp1`     | vLLM / AWQ-INT4           | 1    | 20 K    | 18 (launch-bound, see below)     | no     | kept for posterity, do not use |
 | `tp2`     | vLLM / AWQ-INT4           | 2    | 200 K   | **149**                          | yes    | MoE with vision/tools and prefix cache |
 | **`tp2-mtp`** | vLLM / AWQ + MTP-3 + no-prefix-cache | 2 | 200 K | **179 narr / 264 code / 200 explain** | yes | **MoE max throughput, no prefix cache** |
+
+### Gemma-4-26B-A4B (MoE) + Gemma-4-E4B, via `gemma.sh`
+
+Recipe sourced from [this LocalLLaMA post](https://www.reddit.com/r/LocalLLaMA/comments/1t796qe/gemma_4_26b_hits_600_toks_on_one_rtx_5090/) (vLLM AWQ + DFlash on a 5090) and the 3090-specific reply by `coder543` in the same thread (llama.cpp + ngram-mod). Both measured on this rig — see findings below.
+
+| Variant   | Engine / quant                                 | GPUs | Max ctx | TPS (narr / code / explain) | Vision | When to use |
+|-----------|------------------------------------------------|------|---------|-----------------------------|--------|-------------|
+| **`gguf`** | llama.cpp / Unsloth UD-Q4_K_XL + ngram-mod    | 1    | **262 K** | **131 / 129 / 129**       | yes (mmproj BF16) | **Gemma-4 sweet spot on this rig** — 95% SM util, flat across workloads, 120 TPS at 17K ctx |
+| `tp1`     | vLLM / cyankiwi AWQ + z-lab DFlash-13          | 1    | 20 K    | 95 / **179** / 117          | yes    | short-ctx code generation only — DFlash collapses to ~50 TPS past 16K input, narrative is *slower* than gguf |
+| `e4b`     | vLLM / bf16 Gemma-4-E4B-it                     | 1    | 128 K   | (small/fast variant, not benchmarked yet) | yes | quick chat / agent helper |
+
+DFlash on a 3090 is **workload-dependent**:
+- 26B-A4B AWQ weights leave only ~2.6 GB for KV after the DFlash draft + cudagraphs → had to cap `--max-model-len` at 20 K (Reddit ran 32 K on a 32 GB 5090).
+- DFlash drafts get accepted heavily on structured tokens (code: 179 TPS, +40% vs gguf) but rejected on prose (narrative: 95 TPS, -27% vs gguf). Net loss on most workloads.
+- Acceptance also drops with context length — by 17 K input, decode is roughly 50 TPS, vs gguf's 120 TPS.
+- `gguf` is the safe default. Use `tp1` only if you know you're generating structured output at short context.
 
 ## Tensor-parallel scaling on this rig
 

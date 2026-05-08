@@ -1,0 +1,83 @@
+# ===========================================================================
+# Gemma-4-26B-A4B-it (MoE: 26B total / 4B active) — vLLM AWQ + DFlash spec.
+# Replicates the recipe from
+#   https://www.reddit.com/r/LocalLLaMA/comments/1t796qe/
+# which hit ~578 tok/s on a 5090. Adapted to a single 3090 (24 GB).
+#
+# Stack:
+#   - Main:  cyankiwi/gemma-4-26B-A4B-it-AWQ-4bit  (~13.5 GB AWQ-4 weights)
+#   - Draft: z-lab/gemma-4-26B-A4B-it-DFlash       (~430 M, qwen3 arch)
+#   - vLLM ≥ 0.19.2rc1 (DFlash speculator support)
+#   - num_speculative_tokens=13, max_num_batched_tokens=8192 (Reddit best)
+#
+# 3090 caveats vs the 5090 reference:
+#   - 24 GB vs 32 GB → less KV headroom. Cap max_model_len at 32K for tp1;
+#     bump to gguf mode if you need 100K+.
+#   - 3090 has half the FP16 / FP4 throughput of a 5090, so realistic TPS
+#     should land somewhere in the 200–350 range, not 600. Treat the Reddit
+#     number as an upper bound on the recipe, not a target on this rig.
+#   - DFlash acceptance falls off above ~20K context (per top reddit reply);
+#     for long-context workloads, prefer the gguf mode with ngram-mod spec.
+#
+# Endpoint: http://localhost:8023/v1  (model alias: gemma-4-26b-a4b-awq)
+#
+# Run:  docker compose -f docker-compose.26b-vllm-tp1.yml up -d
+# ===========================================================================
+services:
+  vllm-gemma4-26b-a4b:
+    image: vllm/vllm-openai:gemma4-0505-cu129
+    container_name: vllm-gemma4-26b-a4b
+    restart: "no"
+    ports:
+      - "8023:8000"
+    volumes:
+      - ${MODEL_DIR:-../models}:/root/.cache/huggingface
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+      - VLLM_NO_USAGE_STATS=1
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:512
+      - VLLM_USE_FLASHINFER_SAMPLER=1
+      - OMP_NUM_THREADS=1
+      - VLLM_ALLOW_LONG_MAX_MODEL_LEN=1
+    shm_size: "16gb"
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command:
+      - --model
+      - /root/.cache/huggingface/gemma-4-26b-a4b-awq
+      - --served-model-name
+      - gemma-4-26b-a4b-awq
+      - --quantization
+      - compressed-tensors
+      - --dtype
+      - float16
+      - --tensor-parallel-size
+      - "1"
+      # 32K max-model-len needs ~3 GB KV; 24 GB 3090 with AWQ weights + DFlash
+      # draft + cudagraphs leaves ~2.6 GB → cap at 20K.
+      - --max-model-len
+      - "20000"
+      - --gpu-memory-utilization
+      - "0.95"
+      - --max-num-seqs
+      - "2"
+      - --max-num-batched-tokens
+      - "8192"
+      # The AWQ checkpoint already carries fp8 components — vLLM rejects
+      # --kv-cache-dtype fp8_e5m2 in that combo. Use the default kv dtype.
+      - --trust-remote-code
+      - --speculative-config
+      - '{"model":"/root/.cache/huggingface/gemma-4-26b-a4b-dflash","method":"dflash","num_speculative_tokens":13}'
+      - --enable-prefix-caching
+      - --enable-chunked-prefill
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
