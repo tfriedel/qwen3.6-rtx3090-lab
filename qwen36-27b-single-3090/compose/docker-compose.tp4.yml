@@ -35,7 +35,7 @@
 # ===========================================================================
 services:
   vllm-qwen36-27b:
-    image: vllm/vllm-openai@sha256:9b534fe66daf152e8ceca8a7f8e14c18105aaf6ddabc61eb17730d85b4c7c194
+    image: vllm/vllm-openai@sha256:674922aae790c2cbf45f4e844098d227b80d40a74bfc7797a444d213a221879f
     container_name: vllm-qwen36-27b
     restart: "no"
     ports:

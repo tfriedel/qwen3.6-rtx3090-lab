@@ -21,8 +21,8 @@ Two-layer fix applied in this repo, both shipped via `qwen36-27b-single-3090/com
 
 ### 1. vLLM nightly bump (parser side)
 
-- Bumped pinned image from `9bba4628…` (2026-04-20) → `9b534fe6…` (2026-05-07, commit `51f22dcfd068fe8f1e3192da2a1e825b930223cf`).
-- This crosses the merge of PR #35687, so the Qwen3 reasoning parser now treats `<tool_call>` as an implicit `</think>` and the silent-drop case in our logs should be fixed at the parser level.
+- Bumped pinned image from `9bba4628…` (2026-04-20) → `9b534fe6…` (2026-05-07, commit `51f22dcfd068fe8f1e3192da2a1e825b930223cf`) → `674922aa…` (2026-05-28, commit `626fa9bba5663a5cf6a870debf031ee344ddb822`, latest-nightly tracking).
+- The 05-07 bump crosses the merge of PR #35687, so the Qwen3 reasoning parser now treats `<tool_call>` as an implicit `</think>` and the silent-drop case in our logs should be fixed at the parser level; the 05-28 bump stays upstream of it.
 - Applied to all 11 compose variants (default, text, longctx, tp2, tp2-mtp, tp4, tp4-2, bf16-tp4, 35b-a3b-awq{,-tp1,-mtp}). The 35b-a3b-gguf variant uses a different base image and was left alone.
 
 ### 2. Custom chat template (prompt side)

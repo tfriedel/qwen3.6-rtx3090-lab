@@ -24,11 +24,11 @@
 # ===========================================================================
 services:
   vllm-qwen36-27b:
-    # Pinned to vLLM nightly 2026-05-07 (commit 51f22dcfd068fe8f1e3192da2a1e825b930223cf).
-    # Bumped from 2026-04-20 to pick up PR #35687 (merged 2026-04-24): "Treat <tool_call> as
-    # implicit reasoning end in Qwen3 parser" — fixes silent tool-call drops when the model
-    # emits <tool_call> without closing </think>. See ../../TOOL_CALLING_ISSUES.md.
-    image: vllm/vllm-openai@sha256:9b534fe66daf152e8ceca8a7f8e14c18105aaf6ddabc61eb17730d85b4c7c194
+    # Pinned to vLLM nightly 2026-05-28 (commit 626fa9bba5663a5cf6a870debf031ee344ddb822).
+    # Bumped from 2026-05-07 (commit 51f22dc) to track latest nightly. The Qwen3 tool-call fix
+    # (PR #35687, "Treat <tool_call> as implicit reasoning end") that prompted the prior bump
+    # is well upstream of this commit. See ../../TOOL_CALLING_ISSUES.md.
+    image: vllm/vllm-openai@sha256:674922aae790c2cbf45f4e844098d227b80d40a74bfc7797a444d213a221879f
     container_name: vllm-qwen36-27b
     restart: "no"
     ports:
@@ -44,8 +44,10 @@ services:
       - ../patches/patch_tolist_cudagraph.py:/patches/patch_tolist_cudagraph.py:ro
       - ../patches/templates/qwen3.6-enhanced.jinja:/patches/templates/qwen3.6-enhanced.jinja:ro
     environment:
-      # Uncomment the next line to pin to a specific GPU (e.g. GPU 0):
-      - CUDA_VISIBLE_DEVICES=0
+      # Pinned to GPU 1 (idle). GPU 0 is the desktop GPU (~458 MiB to Xorg/gnome);
+      # the 2026-05-28 nightly's higher baseline OOMs by ~86 MiB there loading the
+      # MTP drafter. GPUs 1-3 are headless. Change to 0 only if the desktop is off.
+      - CUDA_VISIBLE_DEVICES=1
       - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
       - VLLM_WORKER_MULTIPROC_METHOD=spawn
       - NCCL_CUMEM_ENABLE=0
