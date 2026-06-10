@@ -11,8 +11,11 @@ Three launcher scripts, multiple endpoints (run independently or side-by-side, G
 | Qwen3.6-27B (dense) | [`qwen.sh`](./qwen.sh) | `http://localhost:8020/v1` | `qwen3.6-27b-autoround` |
 | Qwen3.6-35B-A3B (MoE) | [`qwen-moe.sh`](./qwen-moe.sh) | `http://localhost:8021/v1` (vLLM) or `:8022/v1` (llama.cpp) | `qwen3.6-35b-a3b-awq` or `qwen3.6-35b-a3b-gguf` |
 | Gemma-4-26B-A4B (MoE) + Gemma-4-E4B | [`gemma.sh`](./gemma.sh) | `:8023/v1` (vLLM AWQ+DFlash) / `:8024/v1` (llama.cpp GGUF) / `:8025/v1` (E4B) | `gemma-4-26b-a4b-awq` / `gemma-4-26b-a4b-gguf` / `gemma-4-e4b` |
+| DiffusionGemma-26B-A4B (MoE, text diffusion) | [`diffusion-gemma.sh`](./diffusion-gemma.sh) | `http://localhost:8031/v1` | `diffusiongemma-26b-a4b-nvfp4` |
 
 The Gemma stack mirrors the recipe from [this LocalLLaMA post](https://www.reddit.com/r/LocalLLaMA/comments/1t796qe/gemma_4_26b_hits_600_toks_on_one_rtx_5090/) (vLLM AWQ + DFlash speculative decoding, ~578 tok/s on a 5090) plus the 3090-specific `llama.cpp + ngram-mod` recipe surfaced in the same thread (~130 tok/s, full 262K ctx). Full benchmarks, replication notes, and the four compose-file fixes needed to make the recipe run on a 3090 are documented in [`GEMMA_FINDINGS.md`](./GEMMA_FINDINGS.md).
+
+The DiffusionGemma stack runs Google's [block-diffusion 26B-A4B](https://blog.google/innovation-and-ai/technology/developers-tools/diffusion-gemma-faster-text-generation/) (released 2026-06-10) on a single 3090 at ~200 TPS decode — the fastest decode on this rig — via the unmerged [vLLM PR #45163](https://github.com/vllm-project/vllm/pull/45163) CI image and the RedHatAI NVFP4 quant. Day-zero benchmarks and the Ampere quant/parallelism failure modes (Marlin dim alignment kills TP=2; PP unimplemented) are documented in [`DIFFUSIONGEMMA_FINDINGS.md`](./DIFFUSIONGEMMA_FINDINGS.md).
 
 ## Headline numbers on this rig
 
@@ -25,6 +28,7 @@ The Gemma stack mirrors the recipe from [this LocalLLaMA post](https://www.reddi
 | `qwen-moe.sh start tp2-mtp` | vLLM / AWQ + MTP-3 + no-prefix-cache | 2× 3090 | 200K | **179 narr / 264 code / 200 explain** | ✅ | MoE max throughput (no prefix cache) |
 | `gemma.sh start gguf` | llama.cpp / Unsloth UD-Q4_K_XL GGUF + ngram-mod spec | 1× 3090 | **262K** | **127–131 flat** | ✅ | **Gemma-4 26B-A4B sweet spot** — 95% SM util, 130 TPS at 0K → 120 at 17K → 104 at 65K |
 | `gemma.sh start tp1` | vLLM / cyankiwi AWQ + z-lab DFlash-13 | 1× 3090 | 20K | 95 narr / **179 code** / 117 explain | ✅ | Gemma-4 26B-A4B short-ctx code generation only — DFlash collapses past ~16K (≈50 TPS at 17K) |
+| `diffusion-gemma.sh start` | vLLM PR #45163 / RedHatAI NVFP4 (block diffusion) | 1× 3090 | 16K | **195–221 narr / 159–189 code** | ❓ | **fastest decode on this rig** — quality below autoregressive Gemma-4; speed-critical interactive work |
 
 Picking between dense 27B and MoE 35B-A3B at the same TP=2: the **27B wins every Qwen-published quality benchmark** by 1–10 pts (MMLU-Pro 86.2 vs 85.2, GPQA 87.8 vs 86.0, SWE-bench 77.2 vs 73.4, AIME 94.1 vs 92.7, Terminal-Bench 59.3 vs 51.5, …). The MoE wins on **speed** (~2× the TPS at the same TP=2 budget). For coding tasks where quality matters, 27B is the default; for fast/cheap calls, the MoE.
 
@@ -47,6 +51,9 @@ cd ~/projects/qwen3.6
 
 # Gemma-4 26B-A4B on 1 GPU — llama.cpp ngram-mod, 130 TPS, full 262K ctx
 ./gemma.sh start gguf
+
+# DiffusionGemma 26B-A4B on 1 GPU — block-diffusion decode, ~200 TPS
+./diffusion-gemma.sh start
 
 ./qwen.sh status            # 27B status
 ./qwen-moe.sh status        # MoE status
@@ -142,6 +149,8 @@ qwen3.6/
 ├── FINDINGS.md                 full technical writeup with bench data
 ├── qwen.sh                     27B launcher (modes: default text longctx tp2 tp4 tp4-2 bf16-tp4)
 ├── qwen-moe.sh                 MoE launcher (modes: gguf tp1 tp2 tp2-mtp)
+├── diffusion-gemma.sh          DiffusionGemma launcher (vLLM PR #45163 CI image, port 8031)
+├── DIFFUSIONGEMMA_FINDINGS.md  DiffusionGemma day-zero bench + Ampere quant/TP failure modes
 └── qwen36-27b-single-3090/     vendored fork of the noonghunna recipe
     ├── compose/
     │   ├── docker-compose.yml                       27B 20K + vision (1 GPU)
@@ -241,3 +250,4 @@ Bigger issues: see [`FINDINGS.md`](./FINDINGS.md) § Things not done + § Pointe
 - llama.cpp single-3090 MoE bench: [`thc1006/qwen3.6-speculative-decoding-rtx3090`](https://github.com/thc1006/qwen3.6-speculative-decoding-rtx3090) (motivated the `gguf` mode + the spec-decode anti-pattern)
 - vLLM TP=2 MTP A/B retest: [`thc1006/qwen3.6-vllm-2x3090`](https://github.com/thc1006/qwen3.6-vllm-2x3090) (motivated the `tp2-mtp` mode)
 - Quant: [`Lorbus/Qwen3.6-27B-int4-AutoRound`](https://huggingface.co/Lorbus/Qwen3.6-27B-int4-AutoRound), [`cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit`](https://huggingface.co/cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit), [`unsloth/Qwen3.6-35B-A3B-GGUF`](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF)
+- DiffusionGemma: [`google/diffusiongemma-26B-A4B-it`](https://huggingface.co/google/diffusiongemma-26B-A4B-it), [`RedHatAI/diffusiongemma-26B-A4B-it-NVFP4`](https://huggingface.co/RedHatAI/diffusiongemma-26B-A4B-it-NVFP4) quant, [vLLM PR #45163](https://github.com/vllm-project/vllm/pull/45163) by LucasWilkinson

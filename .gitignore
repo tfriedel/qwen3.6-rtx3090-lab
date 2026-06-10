@@ -11,6 +11,9 @@ gemma/models/
 # External dependencies cloned by setup.sh
 qwen36-27b-single-3090/patches/genesis/
 
+# Scratch llama.cpp checkout (diffusion PR experiments, not used by any launcher)
+diffusion-gemma/llama.cpp/
+
 # Python / build artifacts
 __pycache__/
 *.pyc
