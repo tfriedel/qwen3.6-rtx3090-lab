@@ -21,11 +21,12 @@ The DiffusionGemma stack runs Google's [block-diffusion 26B-A4B](https://blog.go
 
 | Mode | Engine / quant | GPUs | Max ctx | Decode TPS | Vision | When to use |
 |---|---|---|---|---|---|---|
-| `qwen.sh start tp2` | vLLM / Lorbus AutoRound INT4 | 2× 3090 | 100K | 90–96 narr / 120 code | ✅ | **27B sweet spot** — best dense quality on this rig |
+| `qwen.sh start tp2` | vLLM / Lorbus AutoRound INT4 | 2× 3090 | 100K | **110–112 narr / 141–147 code** | ✅ | **27B sweet spot** — best dense quality on this rig, prefix cache ON |
+| `qwen.sh start tp2-mtp` | vLLM / AutoRound + MTP-4 + no-prefix-cache | 2× 3090 | 100K | **117 narr / 155–170 code** | ✅ | 27B max throughput (no prefix cache) |
 | `qwen.sh start tp4` | vLLM / AutoRound INT4 | 4× 3090 | **500K** | 88–97 / 117 | ✅ | only when you need >100K ctx — single session | | `qwen.sh start tp4-2` | vLLM / AutoRound INT4 | 4× 3090 | **500K** | ~90 per session (114 combined) | ✅ | **two concurrent sessions** — zero-overhead parallel decode |
 | `qwen-moe.sh start gguf` | llama.cpp / Unsloth IQ4_XS GGUF | 1× 3090 | 128K | **115–133** | ❌ | **MoE single-GPU sweet spot** — 96% SM util |
 | `qwen-moe.sh start tp2` | vLLM / cyankiwi AWQ-INT4 | 2× 3090 | 200K | **149** | ✅ | MoE with vision + tools |
-| `qwen-moe.sh start tp2-mtp` | vLLM / AWQ + MTP-3 + no-prefix-cache | 2× 3090 | 200K | **179 narr / 264 code / 200 explain** | ✅ | MoE max throughput (no prefix cache) |
+| `qwen-moe.sh start tp2-mtp` | vLLM / AWQ + MTP-3 + no-prefix-cache | 2× 3090 | 200K | **165–191 narr / 221–226 code** | ✅ | MoE max throughput (no prefix cache) |
 | `gemma.sh start gguf` | llama.cpp / Unsloth UD-Q4_K_XL GGUF + ngram-mod spec | 1× 3090 | **262K** | **127–131 flat** | ✅ | **Gemma-4 26B-A4B sweet spot** — 95% SM util, 130 TPS at 0K → 120 at 17K → 104 at 65K |
 | `gemma.sh start tp1` | vLLM / cyankiwi AWQ + z-lab DFlash-13 | 1× 3090 | 20K | 95 narr / **179 code** / 117 explain | ✅ | Gemma-4 26B-A4B short-ctx code generation only — DFlash collapses past ~16K (≈50 TPS at 17K) |
 | `diffusion-gemma.sh start` | vLLM PR #45163 / RedHatAI NVFP4 (block diffusion) | 1× 3090 | 16K | **195–221 narr / 159–189 code** | ❓ | **fastest decode on this rig** — quality below autoregressive Gemma-4; speed-critical interactive work |
@@ -76,7 +77,8 @@ Both endpoints are OpenAI-compatible; any non-empty API key is accepted. The MoE
 | `default` | 1    | 20 K    | 70–72 / 91        | yes    | yes   | `fp8_e5m2`         | quick chat / vision, frees 3 GPUs |
 | `text`    | 1    | 75 K    | 68–72 / 92        | no     | yes   | `fp8_e5m2`         | long documents, code review, no images |
 | `longctx` | 1    | 125 K   | 30–33 / 42        | yes    | yes   | `turboquant_3bit_nc` | full-repo + vision on a single card |
-| **`tp2`** | 2    | 100 K   | **90–96 / 120**   | yes    | yes   | `fp8_e5m2`         | **TPS sweet spot — recommended default** |
+| **`tp2`** | 2    | 100 K   | **110–112 / 141–147** | yes | yes   | `fp16` (FA2)       | **TPS sweet spot — recommended default** |
+| `tp2-mtp` | 2    | 100 K   | **117 / 155–170** | yes    | yes   | `fp16` (FA2)       | max single-shot throughput — prefix cache OFF, MTP k=4 |
 | `tp4`     | 4    | 500 K   | 88–97 / 117       | yes    | yes   | `fp8_e5m2`         | only when you need >100K ctx — needle verified at **470K** (475 s) | | `tp4-2`   | 4    | 500 K   | ~90 per session (114 combined) | yes    | yes   | `fp8_e5m2`         | **two concurrent sessions** — parallel decode with ~1–2% per-session slowdown |
 
 ### 35B-A3B (MoE), via `qwen-moe.sh`
@@ -86,7 +88,7 @@ Both endpoints are OpenAI-compatible; any non-empty API key is accepted. The MoE
 | **`gguf`** | llama.cpp / IQ4_XS GGUF   | 1    | 128 K   | **115–133**                      | no     | **single-GPU MoE — recommended** |
 | `tp1`     | vLLM / AWQ-INT4           | 1    | 20 K    | 18 (launch-bound, see below)     | no     | kept for posterity, do not use |
 | `tp2`     | vLLM / AWQ-INT4           | 2    | 200 K   | **149**                          | yes    | MoE with vision/tools and prefix cache |
-| **`tp2-mtp`** | vLLM / AWQ + MTP-3 + no-prefix-cache | 2 | 200 K | **179 narr / 264 code / 200 explain** | yes | **MoE max throughput, no prefix cache** |
+| **`tp2-mtp`** | vLLM / AWQ + MTP-3 + no-prefix-cache | 2 | 200 K | **165–191 narr / 221–226 code** | yes | **MoE max throughput, no prefix cache** |
 
 ### Gemma-4-26B-A4B (MoE) + Gemma-4-E4B, via `gemma.sh`
 
@@ -122,6 +124,16 @@ The vLLM/AWQ MoE tp1 mode is included as a documented **anti-pattern**: 18 TPS o
 vLLM's AWQ-INT4 takes 21.56 GB on a 24 GB 3090 — leaves only ~0.7 GB for activations + KV. Both CUDA graphs (~0.7 GB) and torch.compile cache (~0.7 GB) are blocked → `--enforce-eager` is forced → kernel-launch overhead dominates (78% of decode time waiting for the next launch). MoE expert routing makes this dramatically worse than the dense 27B because each layer dispatches many small expert kernels.
 
 The fix isn't tuning vLLM further — it's using a smaller-footprint quant. llama.cpp + Unsloth's IQ4_XS GGUF (~17 GB resident) leaves ~5 GB headroom for KV pool and compute graphs and the GPU saturates. Same model, same hardware, ~7× more throughput. Per the LocalLLaMA recipe thread that motivated this: *"vllm is not going to run on a single 3090 with this model"* — confirmed.
+
+## 2026-07-12: the "onegraph" fixes — +19–39 % on every TP=2 mode
+
+Porting the lossless lesson from the [HF/Google Gemma Challenge](https://huggingface.co/spaces/agent-collaborations/gemma-collab-lessons) ("onegraph": kill kernel-launch overhead in the MTP spec-decode path via full CUDA-graph capture) surfaced three stacked fixes, all shipped in the compose files:
+
+1. **`--attention-backend FLASH_ATTN` + fp16 KV** — with MTP enabled, the old fp8_e5m2 KV forced the FlashInfer backend, which silently downgraded the *whole model* to piecewise cudagraphs. FA2 keeps full decode graphs alive; full-graph capture alone is ~2× decode TPS at fixed kernels on these launch-bound PCIe 3090s.
+2. **`PYTORCH_CUDA_ALLOC_CONF` without `expandable_segments:True`** — expandable segments break custom-allreduce IPC ([vllm #42609](https://github.com/vllm-project/vllm/issues/42609)); since the BAR1 P2P driver, this crashed *every* TP≥2 mode at boot (`custom_all_reduce.cuh:455`). With the flag removed, vLLM's CUSTOM allreduce works over P2P: +10 % code TPS.
+3. **MTP k=4 on the dense `tp2-mtp`** — with the verify pass this cheap, k=4 beats the old k=3 on code (+8 %) at flat narrative.
+
+Result: dense `tp2` 91–96/114–120 → **110–112/141–147**, dense `tp2-mtp` 96/124 → **117/155–170**, MoE `tp2-mtp` → **179/224** (narr/code TPS). Full A/B ladder and attribution controls in [`FINDINGS.md`](./FINDINGS.md) § 2026-07-12. *Caveat: measured while the host was under load from other services — relative deltas are solid (consistent across all A/B pairs), absolute numbers need re-validation on an idle box.*
 
 ## Why `tp2-mtp` works (and `tp2` is still the safe default)
 
@@ -200,7 +212,7 @@ Tool calling is enabled (`qwen3_coder` parser on the vLLM modes; llama.cpp uses 
 ## Hardware
 
 - 4× RTX 3090 (24 GB each, Ampere SM_86), all on NUMA node 0, no NVLink
-- Driver 595.x / CUDA 13.2
+- Driver 610.43.02 (aikitoria BAR1-P2P patched, apt-held — see `p2p-bench/INSTALL_LOG.md`) / CUDA 13.2
 - ~75 GB total disk for all three model sets + the vLLM and llama.cpp images
 
 ## Why the local edits

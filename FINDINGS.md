@@ -180,6 +180,38 @@ The gain is **dramatically smaller** than the MoE `tp2-mtp` saw (+20–77 %). Th
 
 **Recommendation:** keep `tp2` as the documented default. `tp2-mtp` is net positive for raw throughput but the +5–8 % is too small to outweigh prefix-cache benefits on long-system-prompt agentic workflows (per vllm #38182, MTP drops cache hit rate ≈92 % → ≈71 %; on repeated long prompts the cache speedup beats the compute speedup). Use `tp2-mtp` only for stateless throughput-bound batch jobs where each request is fresh and prefix-cache cannot help.
 
+### 2026-07-12 — "onegraph" port from the HF Gemma Challenge: FULL cudagraphs + custom allreduce + k=4 (+26 % narr / +39 % code on `tp2-mtp`)
+
+Motivated by the [HF/Google Gemma Challenge](https://huggingface.co/spaces/agent-collaborations/gemma-collab-lessons) (100+ agents, 6 days, Gemma-4-E4B on 1× A10G + vLLM, ~100 → 315 TPS *lossless*). Their headline lossless win, "onegraph", folded the MTP drafter's whole multi-step loop into a single CUDA graph — i.e. the entire speedup was **kernel-launch-overhead elimination in the spec-decode path**. That principle transferred to our stack; the code did not need to (their implementation lives in an unpublished challenge bucket, and vLLM's drafter is still piecewise-only upstream — [#33341](https://github.com/vllm-project/vllm/issues/33341), PR #34880 open).
+
+**Finding 1 — MTP was silently disabling full cudagraphs on the whole model.** With `--speculative-config mtp` + fp8_e5m2 KV, vLLM auto-picks FlashInfer, whose cudagraph support is `UNIFORM_SINGLE_TOKEN_DECODE`. Spec decode makes decode steps 4-token, so vLLM logs `CUDAGraphMode.FULL_AND_PIECEWISE is not supported with spec-decode ... setting cudagraph_mode=PIECEWISE` and the *entire model* (not just the drafter) drops to piecewise graphs. Fix: `--attention-backend FLASH_ATTN` (FA2 = `UNIFORM_BATCH`, enough for MTP's uniform 4-token decode) — which requires dropping fp8 KV (FA2 is fp16-KV-only; pool 577K → 316K tokens, still 3× the 100 K ctx). `TRITON_ATTN` (would allow fp8 + FULL) crashes with a Dynamo data-dependent assert in qwen3_next attention — dead end on this build.
+
+**Finding 2 — every TP≥2 mode had stopped booting.** vLLM's CUSTOM allreduce crashes at `custom_all_reduce.cuh:455 'invalid argument'` during memory profiling. Root cause is [vllm #42609](https://github.com/vllm-project/vllm/issues/42609): `cudaIpcGetMemHandle` fails on allocations made with `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` — which every compose set. Since the BAR1 P2P driver (2026-05-09), custom AR self-enables (it probes P2P via CUDA directly; `NCCL_P2P_DISABLE=1` does **not** prevent it), so all TP composes crashed on the pinned 05-28 image and on the 07-12 nightly alike. Fix: drop `expandable_segments:True` — custom AR then works over BAR1 P2P and is itself worth +10 % on code (tiny per-layer decode all-reduces are exactly its sweet spot).
+
+**Finding 3 — the k=3 MTP optimum was an artifact of the slow verify pass.** With full graphs + custom AR, re-sweeping k: k=3 → 118/154, **k=4 → 117/166**, k=5 → 114/165 (narr/code). k=4 is the new sweet spot; May's "k=4 regresses narrative" disappears once the verify pass is cheap.
+
+**Caveat:** all 2026-07-12 numbers were taken while the host was under load from other services (Docker stack: Open WebUI, docling, TEI embedders, etc.), so absolute TPS carries extra noise — relative deltas are consistent across every A/B pair, but the benchmarks should be repeated on an idle machine before treating the absolute numbers as canonical.
+
+A/B ladder (bench.sh, same day, same cards, 350 W default):
+
+| dense 27B `tp2-mtp` config | narr TPS | code TPS |
+|---|---:|---:|
+| FlashInfer + fp8 KV + k3 (prod recipe, `--disable-custom-all-reduce` to boot) | 93 | 119 |
+| + FA2 + fp16 KV → FULL_AND_PIECEWISE | 111 | 140 |
+| + nightly 07-12 (v0.23.1rc1) | 115 | 140 |
+| + custom allreduce (allocator fix) | 118 | 154 |
+| **+ MTP k=4 (final recipe)** | **117** | **161–171** |
+
+Attribution controls: FA2 + fp16 + *forced piecewise* = 53/68 → full-graph capture alone is ~2× at fixed kernels (the launch-overhead tax on PCIe 3090s is enormous, exactly the onegraph thesis). FlashInfer + fp16 = 53/67 (its fp16 path on Ampere is catastrophically slow; the old fp8 recipe was accidentally protecting us from it).
+
+**Why the MoE never had this problem:** the AWQ MoE runs fp16 KV (compressed-tensors rejects fp8), so it auto-picked FLASH_ATTN and full graphs all along — which retroactively explains why MTP gains were always dramatic on the MoE (+77 % code) and puny on the dense (+8 %): the dense was piecewise-crippled by the fp8→FlashInfer chain. The MoE still gains from the other two fixes — allocator boot-fix + custom AR + P2P envs (the 05-09 P2P commit never touched the MoE composes): MoE `tp2-mtp` 160/208 → **179/224** narr/code (+12 %/+8 %, bench.sh harness).
+
+The dense `tp2` (prefix cache ON, k=3 — the agentic default) gets the same FA2/fp16/allocator treatment minus the k bump: 91–96/114–120 → **110–112/141–147** (+19 %/+20 %).
+
+Config changes shipped (see compose diffs of this date): `tp2-mtp.yml` = full recipe (FA2, fp16 KV, k=4, allocator fix, nightly digest); `tp2.yml` = same minus k bump (k=3 + prefix cache retained for agentic sessions); `tp4/tp4-2/bf16-tp4/35b-a3b-awq*.yml` = allocator boot-fix (+P2P envs for MoE); fp8 KV **retained** on tp4 variants (fp16 would halve the 507K pool below the 500K ctx headline — that mode trades decode TPS for context, unchanged).
+
+Not pursued from the challenge: vocab pruning + layer removal (their 491 TPS "lossy" winner cost 15 GPQA / 40 MMLU-Pro points — metric gaming, not a win), drafter fine-tuning (Qwen's MTP head ships in-checkpoint), centroids lm_head masking (payoff scales with vocab size; Gemma 262K vs Qwen 151K, and no Qwen centroid tables exist). Upstream to watch: full-cudagraph drafter ([#33341](https://github.com/vllm-project/vllm/issues/33341) closed-as-planned via Model Runner V2, but MRV2 excludes hybrid GDN models like Qwen3.6 — when that lands, the remaining drafter-loop piecewise overhead goes away too).
+
 ### TP=4 multi-GPU variant (`compose/docker-compose.tp4.yml`, local addition)
 
 Not part of the upstream recipe — added here to use all four 3090s on this box. Sharded weights cut per-card model footprint to ~4.5 GB, leaving ~19.5 GB per card for KV. Total KV pool: 484,800 tokens at fp8_e5m2 (vs 24K on single-GPU `text` variant).

@@ -11,7 +11,7 @@
 # ===========================================================================
 services:
   vllm-qwen36-35b-a3b:
-    image: vllm/vllm-openai@sha256:674922aae790c2cbf45f4e844098d227b80d40a74bfc7797a444d213a221879f
+    image: vllm/vllm-openai@sha256:f2ac337893360e23462249c3897e1c92dc8ba8a1ebbc3dd15c4ac931e957438e  # nightly 2026-07-12, v0.23.1rc1
     container_name: vllm-qwen36-35b-a3b
     restart: "no"
     ports:
@@ -25,11 +25,13 @@ services:
       - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
       - VLLM_WORKER_MULTIPROC_METHOD=spawn
       - NCCL_CUMEM_ENABLE=0
-      - NCCL_P2P_DISABLE=1
+      - NCCL_P2P_DISABLE=0
+      - NCCL_P2P_LEVEL=PHB
       - NCCL_IB_DISABLE=1
       - VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=1
       - VLLM_NO_USAGE_STATS=1
-      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:512
+      # expandable_segments:True breaks custom-allreduce IPC (vllm #42609) -> boot crash custom_all_reduce.cuh:455
+      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
       - VLLM_FLOAT32_MATMUL_PRECISION=high
       - VLLM_USE_FLASHINFER_SAMPLER=1
       - OMP_NUM_THREADS=1
@@ -65,6 +67,9 @@ services:
       - float16
       - --tensor-parallel-size
       - "2"
+      # explicit (auto picks FA2 at fp16 KV anyway); keeps FULL cudagraphs with MTP
+      - --attention-backend
+      - FLASH_ATTN
       - --max-model-len
       - "200000"
       - --gpu-memory-utilization

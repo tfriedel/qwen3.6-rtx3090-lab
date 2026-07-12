@@ -1,30 +1,44 @@
 # ===========================================================================
-# EXPERIMENT: Qwen3.6-27B (dense) — vLLM AutoRound TP=2 + MTP-3 + prefix-cache OFF
+# Qwen3.6-27B (dense) — vLLM AutoRound TP=2 + MTP-4 + prefix-cache OFF
+#                        + FULL cudagraphs (FA2) + custom allreduce
 #
-# Hypothesis: the same flag combo that gave the MoE tp2-mtp +20–77 % over its
-# tp2 baseline (179/264/200 vs 149 TPS narrative/code/explain) also lifts the
-# dense 27B over its current `tp2` baseline (90–96 narr / 120 code TPS).
+# The raw-throughput mode. 2026-07-12 recipe (inspired by the HF/Google
+# "Gemma Challenge" onegraph lesson — kill kernel-launch overhead in the
+# MTP spec-decode loop with full CUDA-graph capture):
 #
-# Mechanism: MTP draft tokens drop prefix-cache hit rate ≈92 % → ≈71 %
-# (vllm #38182). With prefix caching ON the cache-loss penalty masks the
-# compute speedup; with it OFF the speedup is realized cleanly.
+#   • --attention-backend FLASH_ATTN + fp16 KV (no fp8_e5m2):
+#     FlashInfer only supports full cudagraphs for single-token decode, so
+#     with MTP enabled vLLM silently downgraded the WHOLE model to PIECEWISE
+#     ("...not supported with spec-decode for attention backend
+#     FlashInferBackend...; setting cudagraph_mode=PIECEWISE").
+#     FA2 (UNIFORM_BATCH) keeps FULL_AND_PIECEWISE alive; full-graph decode
+#     alone is ~2x TPS at fixed kernels on launch-bound 3090s (53→111 narr).
+#     FA2 can't do fp8 KV → fp16; KV pool 316K tokens, still 3x the 100K ctx.
+#     (TRITON_ATTN would allow fp8+FULL but crashes: Dynamo assert in
+#     qwen3_next attention.)
+#   • PYTORCH_CUDA_ALLOC_CONF without expandable_segments:True —
+#     expandable segments break cudaIpcGetMemHandle in vLLM custom allreduce
+#     (crash: custom_all_reduce.cuh:455 'invalid argument'; vllm #42609).
+#     With it removed, CUSTOM allreduce works over BAR1 P2P: +10% code TPS.
+#   • MTP k=4 (was 3): with full graphs + custom AR the verify pass is cheap
+#     enough that k=4 wins on code (+8%) and is flat on narrative.
+#     k-sweep 2026-07-12: k=3 118/154, k=4 117/166, k=5 114/165 (narr/code).
+#   • Image: nightly 2026-07-12 (v0.23.1rc1) — ≈ pinned 05-28 on this path,
+#     pinned by digest for reproducibility.
 #
-# Inspired by r/LocalLLaMA "Qwen3.6 27B NVFP4 + MTP on a single RTX 5090"
-# (post 1t5dya8) — same recipe, just on the AutoRound INT4 weights that work
-# on Ampere. NVFP4 itself is Blackwell-only and won't run here.
+# Measured (bench.sh, 2× 3090, P2P driver 610.43.02):
+#   narr 116-118 / code 153-171 TPS  — vs 93/119 with the previous recipe
+#   (FlashInfer+fp8_e5m2+k3, which ALSO no longer boots: custom-AR crash).
 #
-# Tradeoff vs `tp2`:
-#   + Higher single-shot decode TPS (expected)
-#   - No prefix-cache benefit on repeated long-system-prompt sessions
-# So `tp2` stays the recommended default for agentic workflows; `tp2-mtp` is
-# for raw throughput.
+# Tradeoff vs `tp2`: prefix caching OFF (vllm #38182) — use tp2 for
+# long-system-prompt agentic sessions, tp2-mtp for raw throughput.
 #
 # Run:
 #   ./qwen.sh start tp2-mtp
 # ===========================================================================
 services:
   vllm-qwen36-27b:
-    image: vllm/vllm-openai@sha256:674922aae790c2cbf45f4e844098d227b80d40a74bfc7797a444d213a221879f
+    image: vllm/vllm-openai@sha256:f2ac337893360e23462249c3897e1c92dc8ba8a1ebbc3dd15c4ac931e957438e  # nightly 2026-07-12, v0.23.1rc1
     container_name: vllm-qwen36-27b
     restart: "no"
     ports:
@@ -43,7 +57,8 @@ services:
       - NCCL_IB_DISABLE=1
       - VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=1
       - VLLM_NO_USAGE_STATS=1
-      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:512
+      # expandable_segments:True breaks custom-allreduce IPC (vllm #42609)
+      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
       - VLLM_FLOAT32_MATMUL_PRECISION=high
       - VLLM_USE_FLASHINFER_SAMPLER=1
       - OMP_NUM_THREADS=1
@@ -79,6 +94,9 @@ services:
       - float16
       - --tensor-parallel-size
       - "2"
+      # FA2 keeps FULL cudagraphs alive with MTP (FlashInfer would force PIECEWISE)
+      - --attention-backend
+      - FLASH_ATTN
       - --max-model-len
       - "100000"
       - --gpu-memory-utilization
@@ -91,8 +109,6 @@ services:
       # MoE A/B, so keep 4096 to isolate the prefix-cache delta.
       - --max-num-batched-tokens
       - "4096"
-      - --kv-cache-dtype
-      - fp8_e5m2
       - --trust-remote-code
       - --chat-template
       - /patches/templates/qwen3.6-enhanced.jinja
@@ -105,7 +121,7 @@ services:
       #   --no-enable-prefix-caching   (was --enable-prefix-caching)
       #   speculative-config           (already present in tp2.yml — kept identical)
       - --speculative-config
-      - '{"method":"mtp","num_speculative_tokens":3}'
+      - '{"method":"mtp","num_speculative_tokens":4}'
       - --no-enable-prefix-caching
       - --enable-chunked-prefill
       - --host

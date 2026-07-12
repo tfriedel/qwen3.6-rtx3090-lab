@@ -29,10 +29,12 @@ services:
       - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
       - VLLM_WORKER_MULTIPROC_METHOD=spawn
       - NCCL_CUMEM_ENABLE=0
-      - NCCL_P2P_DISABLE=1
+      - NCCL_P2P_DISABLE=0
+      - NCCL_P2P_LEVEL=PHB
       - VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=1
       - VLLM_NO_USAGE_STATS=1
-      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:512
+      # expandable_segments:True breaks custom-allreduce IPC (vllm #42609) -> boot crash custom_all_reduce.cuh:455
+      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
       - VLLM_FLOAT32_MATMUL_PRECISION=high
       - VLLM_USE_FLASHINFER_SAMPLER=1
       - OMP_NUM_THREADS=1
