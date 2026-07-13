@@ -190,7 +190,7 @@ Motivated by the [HF/Google Gemma Challenge](https://huggingface.co/spaces/agent
 
 **Finding 3 — the k=3 MTP optimum was an artifact of the slow verify pass.** With full graphs + custom AR, re-sweeping k: k=3 → 118/154, **k=4 → 117/166**, k=5 → 114/165 (narr/code). k=4 is the new sweet spot; May's "k=4 regresses narrative" disappears once the verify pass is cheap.
 
-**Caveat:** all 2026-07-12 numbers were taken while the host was under load from other services (Docker stack: Open WebUI, docling, TEI embedders, etc.), so absolute TPS carries extra noise — relative deltas are consistent across every A/B pair, but the benchmarks should be repeated on an idle machine before treating the absolute numbers as canonical.
+**Caveat (resolved 2026-07-13):** all 2026-07-12 numbers below were taken while the host was under load from other services (Docker stack: Open WebUI, docling, TEI embedders, etc.), so absolute TPS carried extra noise. Re-benched on an idle host 2026-07-13 — see that section below. Every mode came in *at or above* the loaded-host numbers; relative deltas held.
 
 A/B ladder (bench.sh, same day, same cards, 350 W default):
 
@@ -211,6 +211,29 @@ The dense `tp2` (prefix cache ON, k=3 — the agentic default) gets the same FA2
 Config changes shipped (see compose diffs of this date): `tp2-mtp.yml` = full recipe (FA2, fp16 KV, k=4, allocator fix, nightly digest); `tp2.yml` = same minus k bump (k=3 + prefix cache retained for agentic sessions); `tp4/tp4-2/bf16-tp4/35b-a3b-awq*.yml` = allocator boot-fix (+P2P envs for MoE); fp8 KV **retained** on tp4 variants (fp16 would halve the 507K pool below the 500K ctx headline — that mode trades decode TPS for context, unchanged).
 
 Not pursued from the challenge: vocab pruning + layer removal (their 491 TPS "lossy" winner cost 15 GPQA / 40 MMLU-Pro points — metric gaming, not a win), drafter fine-tuning (Qwen's MTP head ships in-checkpoint), centroids lm_head masking (payoff scales with vocab size; Gemma 262K vs Qwen 151K, and no Qwen centroid tables exist). Upstream to watch: full-cudagraph drafter ([#33341](https://github.com/vllm-project/vllm/issues/33341) closed-as-planned via Model Runner V2, but MRV2 excludes hybrid GDN models like Qwen3.6 — when that lands, the remaining drafter-loop piecewise overhead goes away too).
+
+### 2026-07-13 — idle-host re-bench confirms the 07-12 numbers (issue #2, item 1)
+
+Re-ran `bench.sh` for the three modes flagged in issue #2 with the host fully idle (`nvidia-smi` 0 % / <100 MiB on all 4 cards, `uptime` load average 1.9 — no other Docker services touching the GPUs; `helm_assistant`/`leafcutter`/`mattermost-archive` containers stayed up but are CPU-only). Each mode was started fresh (`qwen.sh`/`qwen-moe.sh restart`), given its normal boot + CUDA-graph-capture warmup, then hit with the unmodified `bench.sh` (3 warmup + 3 narrative + 2 code requests).
+
+| Mode | narr TPS (07-12, loaded) | narr TPS (07-13, idle) | code TPS (07-12, loaded) | code TPS (07-13, idle) |
+|---|---:|---:|---:|---:|
+| dense 27B `tp2` | 110–112 | **117–118** | 141–147 | **149–151** |
+| dense 27B `tp2-mtp` | 117 | **117–127** | 155–170 | **164–169** |
+| MoE 35B-A3B `tp2-mtp` | 179 | **225–231** | 224 | **284–287** |
+
+The dense modes came in modestly above the loaded-host numbers (+3–7 %), in line with expectations for removing background contention. The MoE `tp2-mtp` jump is much larger (+26 % narr / +28 % code) — bigger than the dense delta, plausibly because the MoE composes share GPUs 1-2 with whichever other service was contending for PCIe/copy-engine time on 07-12, whereas the dense benchmarks that day still had a dedicated pair. No regressions anywhere; the load caveat is retired.
+
+**Update — TP=4 modes re-benched same day (issue #2, item 2).** All three booted clean on the allocator fix (`custom_all_reduce.cuh:455` does not recur). Startup logs answer the item-2 open question directly: `Custom allreduce is disabled because it's not supported on more than two PCIe-only GPUs` — this is a hard-coded vLLM restriction independent of the P2P mesh check, so **custom AR never engages above TP=2 on this rig regardless of driver**. The "TP=4 tree all-reduce may benefit more" hypothesis is dead; TP=4 modes get the allocator boot-fix only, no AR speedup. `tp4`/`tp4-2` also still show `CUDAGraphMode.FULL_AND_PIECEWISE is not supported with spec-decode for attention backend FlashInferBackend ... setting cudagraph_mode=PIECEWISE` — the fp8 KV → FlashInfer → piecewise chain from Finding 1 above is untouched on these modes (fp8 KV was deliberately kept for the 500K context pool), so they don't get the FULL-cudagraph win either.
+
+| Mode | narr TPS | code TPS | Notes |
+|---|---:|---:|---|
+| `tp4` (single session, fp8 KV, 500K ctx) | 90–92 | 120–123 | flat vs the pre-P2P/pre-onegraph estimate (88–97/117) — confirms no AR/graph win applies here |
+| `tp4-2` (1 session active) | 91–96 | 123–128 | same recipe as `tp4`, second session idle |
+| `tp4-2` (2 sessions concurrent) | 88–98 per session (**177–191 combined**) | — | near-linear 2-session scaling, ~2–4% per-session slowdown vs solo. The previously documented "~90 per session (114 combined)" figure undercounted combined throughput — corrected here |
+| `bf16-tp4` (100K ctx, bf16, no MTP) | 48.5–48.9 | 48.5–48.6 | first-ever benchmark for this mode; flat narrative≈code (no spec-decode to create workload-dependent variance), all 4 cards pinned at 100% util / 330–350 W |
+
+The k-resweep and single-GPU piecewise-downgrade items from issue #2 (sections 3–4) were not re-run in this pass — tracked separately as open items on that issue.
 
 ### TP=4 multi-GPU variant (`compose/docker-compose.tp4.yml`, local addition)
 
