@@ -17,6 +17,24 @@ The Gemma stack mirrors the recipe from [this LocalLLaMA post](https://www.reddi
 
 The DiffusionGemma stack runs Google's [block-diffusion 26B-A4B](https://blog.google/innovation-and-ai/technology/developers-tools/diffusion-gemma-faster-text-generation/) (released 2026-06-10) on a single 3090 at ~200 TPS decode — the fastest decode on this rig — via the unmerged [vLLM PR #45163](https://github.com/vllm-project/vllm/pull/45163) CI image and the RedHatAI NVFP4 quant. Day-zero benchmarks and the Ampere quant/parallelism failure modes (Marlin dim alignment kills TP=2; PP unimplemented) are documented in [`DIFFUSIONGEMMA_FINDINGS.md`](./DIFFUSIONGEMMA_FINDINGS.md).
 
+## What's best? (TL;DR)
+
+If you just want the right command for the job on this 4× 3090 rig:
+
+| I want… | Run | Why |
+|---|---|---|
+| **Best all-round / agentic coding** (dense quality, vision, tools, prefix cache) | `./qwen.sh start tp2` | Highest-quality dense 27B on this rig; 117/150 TPS; the safe default. |
+| **Max 27B throughput**, quality still high | `./qwen.sh start tp2-mtp` | MTP + no prefix cache; 117–127/164–169 TPS. Drop it if you reuse long prompts (no prefix cache). |
+| **Long context** (>100K, up to 500K) | `./qwen.sh start tp4` | 4-GPU shard; needle-verified to 470K. Use `tp4-2` instead for **two concurrent sessions**. |
+| **Fastest single-GPU, free the other 3 cards** | `./qwen-moe.sh start gguf` | 35B-A3B MoE on llama.cpp IQ4_XS; 115–133 TPS, 128K ctx, 96% SM util. |
+| **Fastest MoE with vision + tools** (2 GPUs) | `./qwen-moe.sh start tp2-mtp` | 225–287 TPS — ~2× the dense 27B at the same TP=2 budget. |
+| **Fastest decode on the whole rig** (speed > quality) | `./diffusion-gemma.sh start` | Block-diffusion 26B-A4B, ~200 TPS; quality below autoregressive Gemma-4. |
+| **Best Gemma single-GPU**, huge context | `./gemma.sh start gguf` | Gemma-4 26B-A4B, 127–131 TPS flat, full 262K ctx. |
+
+**Dense 27B vs MoE 35B-A3B** (same 2 GPUs): pick **27B (`tp2`)** when answer quality matters — it wins every Qwen-published benchmark by 1–10 pts. Pick the **MoE (`tp2-mtp`)** when you want ~2× the speed for cheaper/faster calls.
+
+**Levers that did *not* help on this rig** (don't bother — details in [`FINDINGS.md`](./FINDINGS.md)): TP=2 is the only decode-TPS lever (TP=4 is slower, not faster, on PCIe-only 3090s); `--cudagraph-mode FULL_DECODE_ONLY` — no win; sampler sweeps — no win; llama.cpp for the dense 27B — 3× slower than vLLM. `tp2` already has vLLM prefix caching on, which covers the "re-submit the same large file" case for free.
+
 ## Headline numbers on this rig
 
 | Mode | Engine / quant | GPUs | Max ctx | Decode TPS | Vision | When to use |
