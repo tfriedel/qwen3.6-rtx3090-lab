@@ -235,6 +235,20 @@ The dense modes came in modestly above the loaded-host numbers (+3–7 %), in li
 
 The k-resweep and single-GPU piecewise-downgrade items from issue #2 (sections 3–4) were not re-run in this pass — tracked separately as open items on that issue.
 
+### 2026-07-13 — `--cudagraph-mode FULL_DECODE_ONLY` A/B on `tp2-mtp` (r/LocalLLaMA tip, no win here)
+
+A [LocalLLaMA comment](https://www.reddit.com/r/LocalLLaMA/comments/1unyhom/considering_buying_another_rtx_3090_benefits/ox7ryrz/) suggested `--cudagraph-mode FULL_DECODE_ONLY` as a way to test whether piecewise-graph switching overhead is costing TPS in mixed prefill+decode batches — full graphs for pure-decode steps, plain eager (not piecewise) for any step that includes a prefill chunk. `CUDAGraphMode.FULL_DECODE_ONLY` (`(2,0)`) is a real enum value in our pinned nightly (confirmed via `CUDAGraphMode` inspection in the image), distinct from our current `FULL_AND_PIECEWISE` (`(2,1)`).
+
+A/B'd on `tp2-mtp` (current recipe already gets FULL_AND_PIECEWISE via the FA2 fix — this tests swapping the "mixed batch" fallback from piecewise to eager):
+
+| Scenario | Metric | `FULL_AND_PIECEWISE` (current) | `FULL_DECODE_ONLY` |
+|---|---|---:|---:|
+| Single sequential request (bench.sh) | narr / code TPS | 117–127 / 164–169 | 116–119 / 164–166 |
+| 2 concurrent sessions | combined narr TPS | 217.8 | 223.3 (+2.5%) |
+| 2 concurrent sessions | combined code TPS | 314.2 | 304.8 (−3.0%) |
+
+No clear win: single-request numbers are within noise (bench.sh sends one request at a time, so there's no mixed-batch scenario to exercise the difference), and the 2-concurrent-session test — the scenario this flag actually targets — moved narrative and code in opposite directions by a few percent, i.e. a wash given single-run sample sizes (3 narrative + 2 code requests per session). Not adopted. Worth revisiting if this rig ever runs high-concurrency continuous batching (many more than 2 simultaneous streams), where mixed-batch frequency would be much higher than in our 2-session test.
+
 ### TP=4 multi-GPU variant (`compose/docker-compose.tp4.yml`, local addition)
 
 Not part of the upstream recipe — added here to use all four 3090s on this box. Sharded weights cut per-card model footprint to ~4.5 GB, leaving ~19.5 GB per card for KV. Total KV pool: 484,800 tokens at fp8_e5m2 (vs 24K on single-GPU `text` variant).
