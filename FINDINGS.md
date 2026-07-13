@@ -249,6 +249,38 @@ A/B'd on `tp2-mtp` (current recipe already gets FULL_AND_PIECEWISE via the FA2 f
 
 No clear win: single-request numbers are within noise (bench.sh sends one request at a time, so there's no mixed-batch scenario to exercise the difference), and the 2-concurrent-session test — the scenario this flag actually targets — moved narrative and code in opposite directions by a few percent, i.e. a wash given single-run sample sizes (3 narrative + 2 code requests per session). Not adopted. Worth revisiting if this rig ever runs high-concurrency continuous batching (many more than 2 simultaneous streams), where mixed-batch frequency would be much higher than in our 2-session test.
 
+### 2026-07-13 — LMCache for prefill/code-ingestion (issue #3, r/LocalLLaMA tip, no working path)
+
+A [LocalLLaMA comment](https://www.reddit.com/r/LocalLLaMA/comments/1unyhom/considering_buying_another_rtx_3090_benefits/ox7ryrz/) flagged [LMCache](https://github.com/LMCache/LMCache) as "the best bang for buck upgrade" for **code-ingestion / prefill speed** on dual-3090 Qwen3.6 — offload KV to CPU RAM via vLLM's KV-connector API so cold-prefix-cache-miss on large pasted-in files survives GPU eviction and gets re-loaded instead of recomputed. Targeted `tp2` (prefix cache ON, agentic default). **Result: no usable path on this model. Documented negative result, not adopted.**
+
+**The blocker is architectural: Qwen3.6-27B is a hybrid Mamba (SSM) + attention model.** vLLM logs `Mamba cache mode is set to 'align'` and pads the attention block size to the mamba page size (~800 tokens). Any `--kv-transfer-config` **force-disables vLLM's hybrid KV-cache manager** — which this model architecturally requires — so it crashes at KV-cache init: `Hybrid KV cache manager is disabled but failed to convert the KV cache specs to one unified type`. Verified this is the architecture, **not** MTP: removing `--speculative-config` crashes identically.
+
+Connector matrix on our pinned nightly (`vllm 0.23.1rc1.dev1042+g8e981630c`, torch 2.11+cu130, `pip install lmcache` → **0.5.1**). HMA = subclasses `vllm…kv_connector.v1.base.SupportsHMA`, i.e. can run on a hybrid model:
+
+| Connector | HMA? | Outcome on `tp2` |
+|---|---|---|
+| `LMCacheConnectorV1` (the one LMCache docs/issue point at) | ❌ | **Never boots** — HMA-incompatible, crashes at KV-cache init (above). Dead end regardless of MTP or CPU-backend config. |
+| `LMCacheMPConnector` (multiprocess) | ✅ | Boots, but see below — requires a sidecar + throttled batch, then **fails every KV store at runtime**. |
+| `SimpleCPUOffloadConnector`, `OffloadingConnector`, `NixlConnector` | ✅ | vLLM-native CPU offload — not LMCache; untested here (out of scope for this issue). |
+
+Getting `LMCacheMPConnector` to even boot on the hybrid model required clearing a cascade of interdependent constraints, each surfacing only after a ~4-min boot:
+1. `--max-num-batched-tokens` must satisfy `block_size ≤ N < 2·block_size` → capped **4128 → 800** (5× smaller prefill chunks — directly counterproductive to prefill throughput, the thing we're trying to speed up).
+2. A **standalone `lmcache server` sidecar** (`--l1-size-gb 8 --chunk-size 800`) on `tcp://localhost:5555` — i.e. exactly the multi-instance/server architecture this box explicitly does *not* need.
+3. `LMCACHE_CHUNK_SIZE` and the server `--chunk-size` must both be a multiple of the 800-token block.
+
+After all that it boots and serves correctly — **but every KV store throws `RuntimeError: Unsupported EngineKVFormat: 10`** (lmcache 0.5.1's transfer backend doesn't support this engine's KV layout). The external cache never populates: `External prefix cache hit rate: 0.0%`. So it delivers **zero** caching benefit while adding a sidecar, log-spam, and a throttled prefill.
+
+**Prefill/TTFT A/B** (`scripts/bench_prefill.py`, new — sibling to `bench.sh` that measures prefill instead of decode; streamed TTFT on an identical 72,835-token synthetic code prefix):
+
+| Scenario | Metric | Plain `tp2` (batched 4128, no LMCache) | `tp2` + LMCache-MP (batched 800 + sidecar) |
+|---|---|---:|---:|
+| Cold (first submit, full prefill) | TTFT | **42.7 s** | 45.8 s (−7%, the 800-token throttle) |
+| Warm-hot (immediate re-submit) | TTFT | **0.87 s** | 0.33 s |
+
+Both warm-hot hits come from **vLLM's own GPU prefix cache** (already ON in `tp2`), not LMCache — LMCache stored nothing. The one scenario LMCache is supposed to win — re-submit a large prefix *after* it's evicted from the 306K-token GPU KV pool — is exactly where its store path is broken, so it can only fall back to full recompute, same as baseline. Net: LMCache is strictly worse here (slower cold prefill + operational complexity + broken stores).
+
+**Conclusion.** `LMCacheConnectorV1` does **not** boot on our pinned nightly for this model (hybrid-Mamba × HMA incompatibility). The only LMCache connector that boots (`LMCacheMPConnector`) is non-functional at the KV-store layer (`EngineKVFormat: 10`) and forces a prefill-throttling batch cap. Not adopted; `tp2` unchanged. Revisit only if LMCache adds this KV format **or** vLLM adds `SupportsHMA` to `LMCacheConnectorV1`. If CPU KV offload is ever wanted here, the vLLM-native HMA-capable connectors (`SimpleCPUOffloadConnector` / `OffloadingConnector`) are the path to try, not LMCache. Kept `scripts/bench_prefill.py` (general prefill/TTFT tool); scratch compose files not landed.
+
 ### TP=4 multi-GPU variant (`compose/docker-compose.tp4.yml`, local addition)
 
 Not part of the upstream recipe — added here to use all four 3090s on this box. Sharded weights cut per-card model footprint to ~4.5 GB, leaving ~19.5 GB per card for KV. Total KV pool: 484,800 tokens at fp8_e5m2 (vs 24K on single-GPU `text` variant).
