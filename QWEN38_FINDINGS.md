@@ -125,8 +125,10 @@ the Terminal-Bench training) — one user saw it ignore an explicitly-instructed
 agent configs when swapping 3.6 → 3.8.
 
 **5. Leads not yet tried on this rig:**
-- [ninfer](https://github.com/Neroued/ninfer) — community reports 200 tok/s single-stream / 1,100 aggregate on a
-  5090 (also `neroued/Qwen3.8-27B-NInfer` on HF). Ampere support unknown; biggest potential speed lever if it works.
+- ~~[ninfer](https://github.com/Neroued/ninfer)~~ — **ruled out 2026-08-15**: from-scratch C++/CUDA engine
+  hard-locked to a single RTX 5090 (`sm_120a` only — the build rejects other architectures); its speed comes from
+  Blackwell NVFP4 W4A4 tensor-core paths that don't exist on Ampere. The community 200/1,100 tok/s numbers are
+  5090-only; nothing to port.
 - DSpark draft models ([llama.cpp PR #25173](https://github.com/ggml-org/llama.cpp/pull/25173) merged;
   `RadixArk/Qwen3.8-27B-DSpark`) — mixed reports (one 5090 user: 100 tok/s; another: 0.29 acceptance, slower).
   DFlash drafter for 3.8 not out yet.
