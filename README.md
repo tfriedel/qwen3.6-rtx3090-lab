@@ -9,11 +9,14 @@ Three launcher scripts, multiple endpoints (run independently or side-by-side, G
 | Model | Launcher | Endpoint | Model name (OpenAI API `model`) |
 |---|---|---|---|
 | Qwen3.6-27B (dense) | [`qwen.sh`](./qwen.sh) | `http://localhost:8020/v1` | `qwen3.6-27b-autoround` |
+| Qwen3.8-27B (dense) | [`qwen38.sh`](./qwen38.sh) | `http://localhost:8026/v1` | `qwen3.8-27b-awq` |
 | Qwen3.6-35B-A3B (MoE) | [`qwen-moe.sh`](./qwen-moe.sh) | `http://localhost:8021/v1` (vLLM) or `:8022/v1` (llama.cpp) | `qwen3.6-35b-a3b-awq` or `qwen3.6-35b-a3b-gguf` |
 | Gemma-4-26B-A4B (MoE) + Gemma-4-E4B | [`gemma.sh`](./gemma.sh) | `:8023/v1` (vLLM AWQ+DFlash) / `:8024/v1` (llama.cpp GGUF) / `:8025/v1` (E4B) | `gemma-4-26b-a4b-awq` / `gemma-4-26b-a4b-gguf` / `gemma-4-e4b` |
 | DiffusionGemma-26B-A4B (MoE, text diffusion) | [`diffusion-gemma.sh`](./diffusion-gemma.sh) | `http://localhost:8031/v1` | `diffusiongemma-26b-a4b-nvfp4` |
 
 The Gemma stack mirrors the recipe from [this LocalLLaMA post](https://www.reddit.com/r/LocalLLaMA/comments/1t796qe/gemma_4_26b_hits_600_toks_on_one_rtx_5090/) (vLLM AWQ + DFlash speculative decoding, ~578 tok/s on a 5090) plus the 3090-specific `llama.cpp + ngram-mod` recipe surfaced in the same thread (~130 tok/s, full 262K ctx). Full benchmarks, replication notes, and the four compose-file fixes needed to make the recipe run on a 3090 are documented in [`GEMMA_FINDINGS.md`](./GEMMA_FINDINGS.md).
+
+The Qwen3.8 stack (added day-2 of the 2026-08-13 release) serves [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) — the newest dense 27B, architecturally identical to Qwen3.6-27B (`qwen3_5` hybrid), so it reuses the proven 3.6 tp2 recipe and image with only the weights swapped (philbert440 W4A16 AWQ, vision + MTP intact). Same speed as 3.6-tp2, better agentic/knowledge quality (Terminal-Bench 73.0 vs 63.4, GPQA-D 89.2 vs 87.8), plus `reasoning_effort` control. Details and one negative result (the 3.6 tp2-mtp throughput trick doesn't transfer) in [`QWEN38_FINDINGS.md`](./QWEN38_FINDINGS.md).
 
 The DiffusionGemma stack runs Google's [block-diffusion 26B-A4B](https://blog.google/innovation-and-ai/technology/developers-tools/diffusion-gemma-faster-text-generation/) (released 2026-06-10) on a single 3090 at ~200 TPS decode — the fastest decode on this rig — via the unmerged [vLLM PR #45163](https://github.com/vllm-project/vllm/pull/45163) CI image and the RedHatAI NVFP4 quant. Day-zero benchmarks and the Ampere quant/parallelism failure modes (Marlin dim alignment kills TP=2; PP unimplemented) are documented in [`DIFFUSIONGEMMA_FINDINGS.md`](./DIFFUSIONGEMMA_FINDINGS.md).
 
@@ -23,7 +26,8 @@ If you just want the right command for the job on this 4× 3090 rig:
 
 | I want… | Run | Why |
 |---|---|---|
-| **Best all-round / agentic coding** (dense quality, vision, tools, prefix cache) | `./qwen.sh start tp2` | Highest-quality dense 27B on this rig; 117/150 TPS; the safe default. |
+| **Best all-round / agentic coding** (dense quality, vision, tools, prefix cache) | `./qwen38.sh start tp2` | Newest dense 27B; ~same speed as 3.6-tp2 (108–114/145–147 TPS) with prefix cache ON; big agentic-quality jump (Terminal-Bench 73.0 vs 63.4). |
+| **Best SWE-bench/LiveCodeBench-style pure coding** | `./qwen.sh start tp2` | Qwen3.6-27B still wins SWE-bench Pro (57.6 vs 53.5) and LiveCodeBench v6 (89.6 vs 83.9); 117/150 TPS. |
 | **Max 27B throughput**, quality still high | `./qwen.sh start tp2-mtp` | MTP + no prefix cache; 117–127/164–169 TPS. Drop it if you reuse long prompts (no prefix cache). |
 | **Long context** (>100K, up to 500K) | `./qwen.sh start tp4` | 4-GPU shard; needle-verified to 470K. Use `tp4-2` instead for **two concurrent sessions**. |
 | **Fastest single-GPU, free the other 3 cards** | `./qwen-moe.sh start gguf` | 35B-A3B MoE on llama.cpp IQ4_XS; 115–133 TPS, 128K ctx, 96% SM util. |
@@ -41,6 +45,7 @@ If you just want the right command for the job on this 4× 3090 rig:
 |---|---|---|---|---|---|---|
 | `qwen.sh start tp2` | vLLM / Lorbus AutoRound INT4 | 2× 3090 | 100K | **117–118 narr / 149–151 code** | ✅ | **27B sweet spot** — best dense quality on this rig, prefix cache ON |
 | `qwen.sh start tp2-mtp` | vLLM / AutoRound + MTP-4 + no-prefix-cache | 2× 3090 | 100K | **117–127 narr / 164–169 code** | ✅ | 27B max throughput (no prefix cache) |
+| `qwen38.sh start tp2` | vLLM / philbert440 AWQ W4A16 + MTP-3 | 2× 3090 | 100K | **108–114 narr / 145–147 code** | ✅ | **Qwen3.8-27B** — newest dense 27B, best agentic quality, prefix cache ON (its tp2-mtp variant adds nothing — see [`QWEN38_FINDINGS.md`](./QWEN38_FINDINGS.md)) |
 | `qwen.sh start tp4` | vLLM / AutoRound INT4 | 4× 3090 | **500K** | **90–92 / 120–123** | ✅ | only when you need >100K ctx — single session | | `qwen.sh start tp4-2` | vLLM / AutoRound INT4 | 4× 3090 | **500K** | **~91–96 solo, 88–98 per session (177–191 combined)** | ✅ | **two concurrent sessions** — near-linear parallel decode |
 | `qwen.sh start bf16-tp4` | vLLM / bf16 | 4× 3090 | 100K | **48.5–48.9** | ❌ | quality ceiling (no quant, no MTP) — slowest 27B mode, all cards at 100% util |
 | `qwen-moe.sh start gguf` | llama.cpp / Unsloth IQ4_XS GGUF | 1× 3090 | 128K | **115–133** | ❌ | **MoE single-GPU sweet spot** — 96% SM util |
@@ -59,6 +64,9 @@ cd ~/projects/qwen3.6
 
 # 27B (dense) on 2 GPUs — recommended default
 ./qwen.sh start tp2
+
+# Qwen3.8-27B (newest dense) on 2 GPUs — best agentic quality, port 8026
+./qwen38.sh start tp2
 
 # MoE on 1 GPU — recommended single-GPU mode
 ./qwen-moe.sh start gguf
@@ -180,6 +188,8 @@ qwen3.6/
 ├── README.md                   this file
 ├── FINDINGS.md                 full technical writeup with bench data
 ├── qwen.sh                     27B launcher (modes: default text longctx tp2 tp4 tp4-2 bf16-tp4)
+├── qwen38.sh                   Qwen3.8-27B launcher (modes: tp2 tp2-mtp; port 8026)
+├── QWEN38_FINDINGS.md          Qwen3.8-27B day-2 bench + MTP-head negative result
 ├── qwen-moe.sh                 MoE launcher (modes: gguf tp1 tp2 tp2-mtp)
 ├── diffusion-gemma.sh          DiffusionGemma launcher (vLLM PR #45163 CI image, port 8031)
 ├── DIFFUSIONGEMMA_FINDINGS.md  DiffusionGemma day-zero bench + Ampere quant/TP failure modes

@@ -1,0 +1,107 @@
+# ===========================================================================
+# Qwen3.8-27B (dense hybrid) — vLLM W4A16 TP=2 + MTP-3 + prefix cache ON
+#
+# Qwen3.8-27B (released 2026-08-13) reuses the exact qwen3_5 architecture of
+# Qwen3.6-27B — same 64-layer 3:1 GatedDeltaNet/full-attention hybrid, same
+# dims, same vocab (248320), same single-layer MTP head config keys — so this
+# recipe is the proven 3.6 tp2 recipe with only the weights swapped:
+#
+#   • Quant: philbert440/Qwen3.8-27B-W4A16-AWQ (compressed-tensors
+#     pack-quantized INT4 g128, MSE observer, thinking-mode calibrated).
+#     Vision tower + BF16 MTP head intact ("nothing stripped"); quantization
+#     is auto-detected from config — no --quantization flag (3.6 used
+#     --quantization auto_round for the Lorbus quant; this one is
+#     compressed-tensors).
+#   • Chat template: the quant's bundled chat_template.jinja (supports
+#     reasoning_effort / preserve_thinking / enable_thinking kwargs) — NOT
+#     the 3.6 custom enhanced template.
+#   • Everything else (FA2 full cudagraphs, custom allreduce env, fp16,
+#     100K ctx, MTP k=3 + prefix caching) identical to
+#     docker-compose.tp2.yml; see that file for the full rationale.
+#
+# Quantizer's V100 reference: 92.5% draft acceptance at K=2, one MTP layer;
+# k-sweep on this rig TBD (3.6 favored k=3 with prefix caching, k=4 raw).
+#
+# Run:
+#   ./qwen38.sh start tp2
+# ===========================================================================
+services:
+  vllm-qwen38-27b:
+    image: vllm/vllm-openai@sha256:f2ac337893360e23462249c3897e1c92dc8ba8a1ebbc3dd15c4ac931e957438e  # nightly 2026-07-12, v0.23.1rc1
+    container_name: vllm-qwen38-27b
+    restart: "no"
+    ports:
+      - "8026:8000"
+    volumes:
+      - ${MODEL_DIR:-../models}:/root/.cache/huggingface
+      - ../patches/patch_tolist_cudagraph.py:/patches/patch_tolist_cudagraph.py:ro
+    environment:
+      - CUDA_VISIBLE_DEVICES=0,1
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+      - VLLM_WORKER_MULTIPROC_METHOD=spawn
+      - NCCL_CUMEM_ENABLE=0
+      - NCCL_P2P_DISABLE=0
+      - NCCL_P2P_LEVEL=PHB
+      - NCCL_IB_DISABLE=1
+      - VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=1
+      - VLLM_NO_USAGE_STATS=1
+      # expandable_segments:True breaks custom-allreduce IPC (vllm #42609)
+      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+      - VLLM_FLOAT32_MATMUL_PRECISION=high
+      - VLLM_USE_FLASHINFER_SAMPLER=1
+      - OMP_NUM_THREADS=1
+      - CUDA_DEVICE_MAX_CONNECTIONS=8
+      - VLLM_ALLOW_LONG_MAX_MODEL_LEN=1
+      - VLLM_MARLIN_USE_ATOMIC_ADD=1
+    shm_size: "24gb"
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        set -e
+        pip install xxhash -q
+        python3 /patches/patch_tolist_cudagraph.py || true
+        exec vllm serve "$@"
+      - --
+    command:
+      - --model
+      - /root/.cache/huggingface/qwen3.8-27b-awq-w4a16
+      - --served-model-name
+      - qwen3.8-27b-awq
+      - --dtype
+      - float16
+      - --tensor-parallel-size
+      - "2"
+      # FA2 keeps FULL cudagraphs alive with MTP (FlashInfer forces PIECEWISE); needs fp16 KV
+      - --attention-backend
+      - FLASH_ATTN
+      - --max-model-len
+      - "100000"
+      - --gpu-memory-utilization
+      - "0.93"
+      - --max-num-seqs
+      - "2"
+      - --max-num-batched-tokens
+      - "4128"
+      - --trust-remote-code
+      - --reasoning-parser
+      - qwen3
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - qwen3_coder
+      - --enable-prefix-caching
+      - --enable-chunked-prefill
+      - --speculative-config
+      - '{"method":"mtp","num_speculative_tokens":3}'
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
