@@ -90,9 +90,59 @@ custom-allreduce env block): model path, served name, **no `--quantization` flag
 mount** (3.8's bundled `chat_template.jinja` carries the `reasoning_effort`/`preserve_thinking`/`enable_thinking`
 logic; the 3.6 enhanced template predates those), port 8026.
 
+## Community pointers (release megathread, r/LocalLLaMA `1voojjz`) — with local verification
+
+**1. The weak MTP head is real, cross-engine, and temperature-dependent.** Multiple reports (llama.cpp on
+2× A5000, vLLM on RTX 6000 Pro) of 3.8 MTP acceptance well below 3.6 (60–70% vs 80–90%). Community root-cause:
+3.8's official *thinking* sampling is temp 1.0 (3.6's was 0.6), and higher temperature flattens the token
+distribution the draft head has to hit. **Verified on this rig** (tp2, 800-tok narrative gen ×3):
+
+| temp | mean acceptance length | avg draft acceptance |
+|---|---|---|
+| 1.0 (official thinking) | 2.34–2.43 | 44.6–47.6% |
+| 0.6 (bench.sh default) | 2.60–2.85 | 53–62% |
+| 0.3 | 2.58–2.59 | 52.6–52.9% |
+
+So the headline TPS above (temp 0.6) is *optimistic* for thinking-mode workloads at official sampling — expect a
+few TPS less at temp 1.0. This further cements the tp2-mtp negative result.
+
+**2. `reasoning_effort` mechanics** (from the chat template — read locally to confirm): valid values are ONLY
+`low` / `medium` / `xhigh`; anything else (incl. `high`) raises a template exception. It works by *system-prompt
+injection*: `xhigh` (the default!) injects "think carefully… validate assumptions…", `medium` injects **nothing**,
+`low` injects "keep thinking brief". Measured on the 12-coin puzzle: xhigh blew through an 8000-tok cap without
+finishing; medium finished in 3,153 tok; low 3,258. Community reports the same 3–5× token burn at xhigh
+(57K-tok one-shots). **Recommendation: pass `chat_template_kwargs: {"reasoning_effort": "medium"}` for daily
+coding**, keep xhigh for peak-difficulty tasks. Caveat: switching effort mid-session changes the injected system
+prompt → invalidates the prefix cache.
+
+**3. Client config: vLLM puts thinking in `reasoning`, not `reasoning_content`.** Verified on this endpoint —
+our v0.23.1rc1 build returns `message.reasoning`; llama.cpp uses `reasoning_content` (which is what the
+megathread's OpenCode/Pi snippets assume). Point `reasoningField`/`compatibility.reasoningField` at `reasoning`
+for this stack, and map thinking levels to low/medium/xhigh only.
+
+**4. Agentic behavior shift:** 3.8 is strongly biased toward raw shell commands over configured MCP tools (likely
+the Terminal-Bench training) — one user saw it ignore an explicitly-instructed filesystem MCP for reads. Watch
+agent configs when swapping 3.6 → 3.8.
+
+**5. Leads not yet tried on this rig:**
+- [ninfer](https://github.com/Neroued/ninfer) — community reports 200 tok/s single-stream / 1,100 aggregate on a
+  5090 (also `neroued/Qwen3.8-27B-NInfer` on HF). Ampere support unknown; biggest potential speed lever if it works.
+- DSpark draft models ([llama.cpp PR #25173](https://github.com/ggml-org/llama.cpp/pull/25173) merged;
+  `RadixArk/Qwen3.8-27B-DSpark`) — mixed reports (one 5090 user: 100 tok/s; another: 0.29 acceptance, slower).
+  DFlash drafter for 3.8 not out yet.
+- exllamav3 6 bpw (`turboderp/Qwen3.8-27B-exl3`) — 70–150 tok/s at 220K ctx on a 5090.
+- [froggeric/Qwen-Fixed-Chat-Templates](https://huggingface.co/froggeric/Qwen-Fixed-Chat-Templates) (v22) — fixes
+  mid-thinking stops around tool calls seen in some UIs; try if tool-call glitches appear. The `peculiar-ragdoll`
+  "Dirk" variant additionally suppresses xhigh + injects a conciseness prompt, but costs ~19% wall-clock in
+  multi-turn (extra prefill every turn) and de-aligns the model from its xhigh-native post-training.
+
+**6. Community quality consensus** (matches the benchmark table): clear step up for coding/agentic work (parallel
+subagents, long tool-call chains work; "night and day" vs 3.6 on game one-shots), STEM/math roughly flat vs 3.6,
+and the quality is gated on generous reasoning budgets — it buys capability with tokens.
+
 ## Sources
 
-Reddit release megathread (`r/LocalLLaMA` `1voojjz`) was login-walled + mirror-blocked on 2026-08-15 and could not
-be read; findings above are from primary sources instead: the HF model cards, [vLLM recipe page]
-(https://recipes.vllm.ai/Qwen/Qwen3.8-27B) (notes: vLLM ≥ 0.17.0, MXFP4 broken on NVIDIA — NVFP4 is
-Blackwell-oriented and irrelevant to Ampere), and the quantizer's validation writeup.
+Primary: the HF model cards, [vLLM recipe page](https://recipes.vllm.ai/Qwen/Qwen3.8-27B) (notes: vLLM ≥ 0.17.0,
+MXFP4 broken on NVIDIA — NVFP4 is Blackwell-oriented and irrelevant to Ampere), and the quantizer's validation
+writeup. Community: the r/LocalLLaMA release megathread (`1voojjz`) and its linked threads (`1vo9mj4`, `1vo9nn7`,
+`1vo9qjv`, `1voa3ch`).
